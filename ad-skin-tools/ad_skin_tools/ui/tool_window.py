@@ -14,7 +14,13 @@ from ad_skin_tools.core.skin_cluster import (
 
 
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
-WINDOW_LABEL = "AD Skin Weights Tool Settings"
+WINDOW_LABEL = "AD Skin Weights Tool"
+
+WINDOW_WIDTH = 390
+WINDOW_HEIGHT = 640
+
+CTRL_MAIN_SCROLL = "adSkin_mainScroll"
+CTRL_MAIN_COLUMN = "adSkin_mainColumn"
 
 CTRL_SKIN_MENU = "adSkin_skinClusterMenu"
 CTRL_MESH_LABEL = "adSkin_meshLabel"
@@ -37,22 +43,49 @@ _STATE = {
     "component_selection": None,
 }
 
-
-def show(auto_refresh=False):
+def _delete_existing_workspace():
     if cmds.workspaceControl(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
+
+    try:
+        if cmds.workspaceControlState(WINDOW_NAME, exists=True):
+            cmds.workspaceControlState(WINDOW_NAME, remove=True)
+    except Exception:
+        pass
+
+def show(auto_refresh=False):
+    _delete_existing_workspace()
 
     cmds.workspaceControl(
         WINDOW_NAME,
         label=WINDOW_LABEL,
         retain=False,
         floating=True,
-        initialWidth=430,
-        initialHeight=720,
+        initialWidth=WINDOW_WIDTH,
+        initialHeight=WINDOW_HEIGHT,
+    )
+
+    cmds.workspaceControl(
+        WINDOW_NAME,
+        edit=True,
+        label=WINDOW_LABEL,
     )
 
     cmds.setParent(WINDOW_NAME)
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
+
+    cmds.scrollLayout(
+        CTRL_MAIN_SCROLL,
+        childResizable=True,
+        verticalScrollBarThickness=16,
+        horizontalScrollBarThickness=0,
+    )
+
+    cmds.columnLayout(
+        CTRL_MAIN_COLUMN,
+        adjustableColumn=True,
+        rowSpacing=4,
+        columnAttach=("both", 4),
+    )
 
     _build_header()
     _build_skin_cluster_section()
@@ -62,28 +95,32 @@ def show(auto_refresh=False):
     _build_visualization_section()
     _build_advanced_section()
 
+    cmds.setParent("..")
+    cmds.setParent("..")
+
     if auto_refresh:
         load_skin_weight(silent=True)
 
-
 def _build_header():
     cmds.rowLayout(
-        numberOfColumns=3,
+        numberOfColumns=2,
         adjustableColumn=1,
-        columnAttach=(1, "both", 2),
+        columnAttach=[
+            (1, "both", 2),
+            (2, "both", 2),
+        ],
     )
-
-    cmds.text(label="", align="left")
 
     cmds.button(
         label="Tool Help",
-        height=28,
+        height=26,
         command=lambda *_: show_help(),
     )
 
     cmds.button(
         label="Env",
-        height=28,
+        width=42,
+        height=26,
         command=lambda *_: show_environment_report(),
     )
 
@@ -143,7 +180,7 @@ def _build_joints_section():
     cmds.textScrollList(
         CTRL_JOINT_LIST,
         allowMultiSelection=True,
-        height=180,
+        height=145,
     )
 
     cmds.rowLayout(numberOfColumns=3, adjustableColumn=1)
