@@ -16,8 +16,17 @@ from ad_skin_tools.core.skin_cluster import (
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
 WINDOW_LABEL = "AD Skin Weights Tool"
 
-WINDOW_WIDTH = 390
-WINDOW_HEIGHT = 640
+WINDOW_WIDTH = 350
+WINDOW_HEIGHT = 620
+
+UI_MARGIN = 4
+ROW_HEIGHT = 24
+BUTTON_HEIGHT = 26
+
+LABEL_LEFT = 0
+LABEL_RIGHT = 25
+CONTROL_LEFT = 26
+CONTROL_RIGHT = 100
 
 CTRL_MAIN_SCROLL = "adSkin_mainScroll"
 CTRL_MAIN_COLUMN = "adSkin_mainColumn"
@@ -102,29 +111,13 @@ def show(auto_refresh=False):
         load_skin_weight(silent=True)
 
 def _build_header():
-    cmds.rowLayout(
-        numberOfColumns=2,
-        adjustableColumn=1,
-        columnAttach=[
-            (1, "both", 2),
-            (2, "both", 2),
+    _button_row(
+        [
+            ("Tool Help", lambda *_: show_help()),
+            ("Env", lambda *_: show_environment_report()),
         ],
+        height=BUTTON_HEIGHT,
     )
-
-    cmds.button(
-        label="Tool Help",
-        height=26,
-        command=lambda *_: show_help(),
-    )
-
-    cmds.button(
-        label="Env",
-        width=42,
-        height=26,
-        command=lambda *_: show_environment_report(),
-    )
-
-    cmds.setParent("..")
 
 def _build_skin_cluster_section():
     cmds.frameLayout(
@@ -137,21 +130,24 @@ def _build_skin_cluster_section():
 
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
 
-    cmds.optionMenu(CTRL_SKIN_MENU, label="Skin Cluster")
+    _label_control_row(
+        "Skin Cluster",
+        lambda: cmds.optionMenu(CTRL_SKIN_MENU),
+    )
 
     cmds.text(CTRL_MESH_LABEL, label="Mesh: <none>", align="left")
     cmds.text(CTRL_MODE_LABEL, label="Mode: No object loaded", align="left")
     cmds.text(CTRL_JOINT_LABEL, label="Joints: 0", align="left")
 
-    cmds.button(
-        label="Load Skin Weight",
+    _button_row(
+        [
+            ("Load Skin Weight", lambda *_: load_skin_weight()),
+        ],
         height=28,
-        command=lambda *_: load_skin_weight(),
     )
 
     cmds.setParent("..")
     cmds.setParent("..")
-
 
 def _build_joints_section():
     cmds.frameLayout(
@@ -183,27 +179,21 @@ def _build_joints_section():
         height=145,
     )
 
-    cmds.rowLayout(numberOfColumns=3, adjustableColumn=1)
-
-    cmds.button(
-        label="Add Selected Joints",
+    _button_row(
+        [
+            ("Add Selected Joints", lambda *_: add_selected_joints()),
+            ("Remove Selected", lambda *_: remove_selected_joints()),
+            ("Remove All", lambda *_: remove_all_joints()),
+        ],
         height=28,
-        command=lambda *_: add_selected_joints(),
     )
 
-    cmds.button(
-        label="Remove Selected",
+    _button_row(
+        [
+            ("Show Selected Joint In List", lambda *_: show_selected_joints_in_list()),
+        ],
         height=28,
-        command=lambda *_: remove_selected_joints(),
     )
-
-    cmds.button(
-        label="Remove All",
-        height=28,
-        command=lambda *_: remove_all_joints(),
-    )
-
-    cmds.setParent("..")
 
     cmds.button(
         label="Show Selected Joint In List",
@@ -213,7 +203,6 @@ def _build_joints_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
-
 
 def _build_operation_section():
     cmds.frameLayout(
@@ -251,7 +240,6 @@ def _build_operation_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
-
 
 def _build_falloff_section():
     cmds.frameLayout(
@@ -305,7 +293,6 @@ def _build_falloff_section():
     cmds.setParent("..")
     cmds.setParent("..")
 
-
 def _build_visualization_section():
     cmds.frameLayout(
         label="Visualization",
@@ -324,7 +311,6 @@ def _build_visualization_section():
     cmds.setParent("..")
     cmds.setParent("..")
 
-
 def _build_advanced_section():
     cmds.frameLayout(
         label="Advanced",
@@ -342,7 +328,6 @@ def _build_advanced_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
-
 
 def load_skin_weight(silent=False):
     """
@@ -419,13 +404,11 @@ def load_skin_weight(silent=False):
         if not silent:
             _show_error(exc)
 
-
 def refresh_from_selection(silent=False):
     """
     Backward-compatible alias during QC transition.
     """
     load_skin_weight(silent=silent)
-
 
 def add_selected_joints():
     try:
@@ -457,7 +440,6 @@ def add_selected_joints():
 
     except Exception as exc:
         _show_error(exc)
-
 
 def remove_selected_joints():
     try:
@@ -619,7 +601,6 @@ def apply_operation():
         button=["OK"],
     )
 
-
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
@@ -637,14 +618,12 @@ def show_help():
         button=["OK"],
     )
 
-
 def show_environment_report():
     cmds.confirmDialog(
         title="AD Skin Tools Environment",
         message=environment_report(),
         button=["OK"],
     )
-
 
 def _set_option_menu_items(menu_name, items):
     existing_items = cmds.optionMenu(menu_name, query=True, itemListLong=True) or []
@@ -654,7 +633,6 @@ def _set_option_menu_items(menu_name, items):
 
     for item in items:
         cmds.menuItem(label=item, parent=menu_name)
-
 
 def _set_joint_list(joints):
     """
@@ -699,11 +677,9 @@ def _update_joint_count_label():
         label=f"Joints: {len(joints)}",
     )
 
-
 def _require_loaded_mesh():
     if not _STATE.get("mesh_shape"):
         raise RuntimeError("No mesh loaded. Select a mesh object and click Load Skin Weight.")
-
 
 def _joint_exists_in_list(joint: str, joint_list: list[str]) -> bool:
     normalized = _normalize_joint_path(joint)
@@ -713,7 +689,6 @@ def _joint_exists_in_list(joint: str, joint_list: list[str]) -> bool:
             return True
 
     return False
-
 
 def _short_name(node: str) -> str:
     return node.split("|")[-1]
@@ -725,7 +700,6 @@ def _normalize_joint_path(joint: str) -> str:
         return matches[0]
 
     return joint
-
 
 def _unique_joint_paths(joints: list[str]) -> list[str]:
     result = []
@@ -742,7 +716,6 @@ def _unique_joint_paths(joints: list[str]) -> list[str]:
         result.append(normalized)
 
     return result
-
 
 def _make_unique_joint_label(joint: str, all_joints: list[str]) -> str:
     """
@@ -777,18 +750,95 @@ def _make_unique_joint_label(joint: str, all_joints: list[str]) -> str:
 
     return joint
 
-
 def _dag_parts(node: str) -> list[str]:
     return [part for part in node.split("|") if part]
-
 
 def _path_from_display_label(display_label: str):
     return _STATE.get("joint_display_to_path", {}).get(display_label)
 
-
 def _display_label_from_path(joint: str):
     normalized = _normalize_joint_path(joint)
     return _STATE.get("joint_path_to_display", {}).get(normalized)
+
+def _percent_row(height=ROW_HEIGHT):
+    return cmds.formLayout(
+        numberOfDivisions=100,
+        height=height,
+    )
+
+
+def _attach_percent(layout, control, left, right, top=2, bottom=2):
+    cmds.formLayout(
+        layout,
+        edit=True,
+        attachForm=[
+            (control, "top", top),
+            (control, "bottom", bottom),
+        ],
+        attachPosition=[
+            (control, "left", 0, left),
+            (control, "right", 0, right),
+        ],
+    )
+
+
+def _label_control_row(label, control_builder, height=ROW_HEIGHT):
+    """
+    Build a percentage-based row:
+    0-25%   label
+    26-100% control
+    """
+    layout = _percent_row(height=height)
+
+    label_control = cmds.text(
+        label=label,
+        align="left",
+    )
+
+    control = control_builder()
+
+    _attach_percent(layout, label_control, LABEL_LEFT, LABEL_RIGHT)
+    _attach_percent(layout, control, CONTROL_LEFT, CONTROL_RIGHT)
+
+    cmds.setParent("..")
+    return control
+
+
+def _button_row(buttons, height=BUTTON_HEIGHT):
+    """
+    Build evenly distributed button row.
+
+    buttons:
+        [
+            ("Label", callback),
+            ("Label", callback),
+        ]
+    """
+    layout = _percent_row(height=height)
+
+    count = len(buttons)
+
+    for index, (label, callback) in enumerate(buttons):
+        left = int(index * 100 / count)
+        right = int((index + 1) * 100 / count)
+
+        button = cmds.button(
+            label=label,
+            height=height,
+            command=callback,
+        )
+
+        _attach_percent(
+            layout,
+            button,
+            left,
+            right,
+            top=1,
+            bottom=1,
+        )
+
+    cmds.setParent("..")
+    return layout
 
 def _info(message: str):
     cmds.inViewMessage(
@@ -796,7 +846,6 @@ def _info(message: str):
         position="topCenter",
         fade=True,
     )
-
 
 def _show_error(exc: Exception):
     traceback.print_exc()
