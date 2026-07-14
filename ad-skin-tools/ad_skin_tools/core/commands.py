@@ -25,6 +25,7 @@ from ad_skin_tools.core.mesh import (
     get_world_positions,
     get_vertex_count,
     get_all_vertex_neighbors,
+    get_weighted_vertex_neighbors,
 )
 
 from ad_skin_tools.core.weights import (
@@ -32,18 +33,6 @@ from ad_skin_tools.core.weights import (
     blend_by_falloff,
     build_even_target,
     build_closest_target,
-)
-
-from ad_skin_tools.core.mesh import (
-    get_vertex_positions,
-    get_world_positions,
-    get_vertex_count,
-    get_all_vertex_neighbors,
-    get_weighted_vertex_neighbors,
-)
-
-surface_adjacency = get_weighted_vertex_neighbors(
-    mesh_shape
 )
 
 @dataclass(frozen=True)
@@ -157,6 +146,13 @@ def bind_object_closest(
                 mesh_shape,
                 vertex_ids,
             )
+            
+            # Build the weighted topology graph for the mesh currently being bound.
+            # This must happen inside the operation because mesh_shape belongs to
+            # the current loaded object and does not exist during module import.
+            surface_adjacency = get_weighted_vertex_neighbors(
+                mesh_shape
+            )            
             
             solver_result = solve_segment_weights(
                 vertex_positions=vertex_positions,

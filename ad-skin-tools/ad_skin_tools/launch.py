@@ -22,6 +22,7 @@ def reload_modules():
         skin_cluster,
         influence,
         weights,
+        surface_distance,
         segment_solver,
         commands,
         tool_window,
