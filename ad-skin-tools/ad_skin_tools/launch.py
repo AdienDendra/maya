@@ -11,6 +11,8 @@ def reload_modules():
     import ad_skin_tools.core.weights as weights
     import ad_skin_tools.core.commands as commands
     import ad_skin_tools.ui.tool_window as tool_window
+    import ad_skin_tools.core.segment_solver as segment_solver
+    import ad_skin_tools.core.commands as commands
 
     for module in [
         compat,
@@ -20,6 +22,7 @@ def reload_modules():
         skin_cluster,
         influence,
         weights,
+        segment_solver,
         commands,
         tool_window,
     ]:

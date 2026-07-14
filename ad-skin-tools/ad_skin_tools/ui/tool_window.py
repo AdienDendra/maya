@@ -43,6 +43,7 @@ CTRL_APPLY_TO = "adSkin_applyTo"
 
 CTRL_STRENGTH = "adSkin_strength"
 CTRL_SMOOTH_ITERATIONS = "adSkin_smoothIterations"
+CTRL_MAX_INFLUENCES = "adSkin_maxInfluences"
 
 RADIO_LABEL_WIDTH = 48
 RADIO_CONTROL_GAP = 2
@@ -299,13 +300,15 @@ def _build_falloff_section():
     )
 
     cmds.intSliderGrp(
-        CTRL_SMOOTH_ITERATIONS,
-        label="Smooth Iterations",
+        CTRL_MAX_INFLUENCES,
+        label="Max Influences",
         field=True,
         minValue=1,
-        maxValue=20,
-        value=1,
-        enable=False,
+        maxValue=8,
+        fieldMinValue=1,
+        fieldMaxValue=32,
+        value=5,
+        enable=True,
     )
 
     cmds.floatSliderGrp(
@@ -659,13 +662,11 @@ def _clear_tool_context():
 
 def apply_operation():
     """
-    QC-2:
-    Custom object-wide Closest bind for an unskinned mesh.
+    QC-2.2:
+    Segment Weighted Object Bind for an unskinned mesh.
 
-    QC-2 intentionally ignores disabled radio controls because only:
-        Mode     = Closest
-        Apply To = Object
-    are available.
+    Maya creates the skinCluster container, while the custom segment
+    solver calculates and writes the complete weight matrix.
     """
     try:
         _require_loaded_mesh()
@@ -673,9 +674,8 @@ def apply_operation():
         if _STATE.get("has_skin_cluster"):
             raise RuntimeError(
                 "This object already has skin weights.\n\n"
-                "Object-wide Closest is blocked to prevent accidental "
-                "redistribution of existing skin weights.\n\n"
-                "Existing skin weights can only be edited through "
+                "Object-wide Closest is blocked to protect existing weights.\n\n"
+                "An already-skinned object can only be edited through "
                 "vertex selection."
             )
 
@@ -685,56 +685,84 @@ def apply_operation():
 
         if len(joints) < 2:
             raise RuntimeError(
-                "Closest Object Bind requires at least two joints.\n\n"
+                "Segment Weighted Bind requires at least two joints.\n\n"
                 "Select joints in Maya and click Add Selected Joints."
+            )
+
+        max_influences = cmds.intSliderGrp(
+            CTRL_MAX_INFLUENCES,
+            query=True,
+            value=True,
+        )
+
+        if max_influences < 1:
+            raise RuntimeError(
+                "Maximum Influences must be at least 1."
             )
 
         result = commands.bind_object_closest(
             mesh_shape=_STATE["mesh_shape"],
             mesh_transform=_STATE["mesh_transform"],
             joints=joints,
+            max_influences=max_influences,
         )
 
         _sync_loaded_skin_context()
 
-        print("\n[AD Skin Tools] Custom Closest Object Bind")
+        print("\n[AD Skin Tools] QC-2.2 Segment Weighted Bind")
         print(f"Skin Cluster: {result.skin_cluster}")
         print(f"Mesh: {result.mesh_transform}")
         print(f"Vertices: {result.vertex_count}")
-        print(f"Influences: {result.influence_count}")
-        print("Vertex assignments:")
+        print(f"Joints: {result.influence_count}")
+        print(f"Bone Segments: {result.segment_count}")
+        print(
+            "Average influences per vertex: "
+            f"{result.average_influence_count:.3f}"
+        )
+        print(
+            "Maximum influences used: "
+            f"{result.max_influence_count}"
+        )
+        print(
+            "Fallback vertices: "
+            f"{result.fallback_vertex_count}"
+        )
+        print("Dominant joint assignments:")
 
         for influence, count in result.assignment_counts.items():
             print(f"  {influence}: {count}")
 
         _info(
-            f"Closest bind complete: "
-            f"{result.vertex_count} vertices assigned across "
-            f"{result.influence_count} joints."
+            f"Segment bind complete: "
+            f"{result.vertex_count} vertices, "
+            f"maximum {max_influences} influences."
         )
 
     except Exception as exc:
         _show_error(exc)
-        
+
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
         message=(
-            "QC-2 Workflow:\n\n"
+            "QC-2.2 Workflow:\n\n"
             "1. Select an unskinned mesh object.\n"
             "2. Click Load Skin Weight.\n"
-            "3. Select one or more joints in Maya.\n"
+            "3. Select at least two joints.\n"
             "4. Click Add Selected Joints.\n"
-            "5. Click Apply Operation.\n\n"
-            "Closest Object Bind:\n"
+            "5. Set Maximum Influences, default 5.\n"
+            "6. Click Apply Operation.\n\n"
+            "Segment Weighted Bind:\n"
             "- Creates a new skinCluster.\n"
-            "- Uses every joint in the window list.\n"
-            "- Assigns each vertex to one closest joint.\n"
-            "- Blocks object-wide operations when skin weights already exist."
+            "- Measures distance against bone segments.\n"
+            "- Blends weights along connected joints.\n"
+            "- Uses compact radial falloff.\n"
+            "- Limits each vertex to the selected maximum influences.\n"
+            "- Blocks object-wide operations on existing skin weights."
         ),
         button=["OK"],
     )
-    
+      
 def show_environment_report():
     cmds.confirmDialog(
         title="AD Skin Tools Environment",

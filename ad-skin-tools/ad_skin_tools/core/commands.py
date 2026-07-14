@@ -2,6 +2,7 @@ import maya.cmds as cmds
 from dataclasses import dataclass
 from typing import Dict
 
+from ad_skin_tools.core.segment_solver import solve_segment_weights
 from ad_skin_tools.core.undo import undo_chunk
 from ad_skin_tools.core.selection import get_component_selection
 from ad_skin_tools.core.compat import ensure_numpy
@@ -38,27 +39,29 @@ class ClosestObjectBindResult:
     vertex_count: int
     influence_count: int
     assignment_counts: Dict[str, int]
+    segment_count: int
+    average_influence_count: float
+    max_influence_count: int
+    fallback_vertex_count: int
 
 def bind_object_closest(
     mesh_shape: str,
     mesh_transform: str,
     joints: list[str],
+    max_influences: int = 5,
 ) -> ClosestObjectBindResult:
     """
-    Create a skinCluster and assign every mesh vertex to its closest joint.
+    QC-2.2 Segment Weighted Bind.
 
-    Distance calculation is performed by this tool, not by Maya's automatic
-    skin binding:
+    Maya creates only the skinCluster container. All weight distribution is
+    calculated by the custom segment solver.
 
-        closest = argmin(
-            squared_world_distance(vertex, joint)
-        )
-
-    Each vertex receives exactly:
-        closest joint = 1.0
-        all other joints = 0.0
-
-    Exact-distance ties are resolved deterministically by influence-list order.
+    Solver behaviour:
+    - distance is calculated against bone segments;
+    - position along a segment controls endpoint blending;
+    - radial distance controls local influence;
+    - weights are pruned to max_influences;
+    - every vertex row is normalized to 1.0.
     """
     if not mesh_shape or not cmds.objExists(mesh_shape):
         raise RuntimeError(
@@ -82,13 +85,20 @@ def bind_object_closest(
             "This object already has skin weights.\n\n"
             "Object-wide Closest is blocked to prevent accidental "
             "redistribution of existing skin weights.\n\n"
-            "An already-skinned mesh must be edited through vertex selection."
+            "Existing skin weights can only be edited through "
+            "vertex selection."
         )
 
     if len(joints) < 2:
         raise RuntimeError(
-            "Closest Object Bind requires at least two joints.\n\n"
-            "Select joints in Maya and click Add Selected Joints."
+            "Segment Weighted Bind requires at least two joints."
+        )
+
+    max_influences = int(max_influences)
+
+    if max_influences < 1:
+        raise RuntimeError(
+            "Maximum influences must be at least 1."
         )
 
     original_selection = cmds.ls(
@@ -100,14 +110,17 @@ def bind_object_closest(
     adapter = None
 
     try:
-        with undo_chunk("AD Skin Initial Closest Bind"):
+        with undo_chunk("AD Skin Segment Weighted Bind"):
             adapter = create_closest_skin_cluster(
                 mesh_shape=mesh_shape,
                 mesh_transform=mesh_transform,
                 joints=joints,
+                max_influences=max_influences,
             )
 
-            vertex_count = get_vertex_count(mesh_shape)
+            vertex_count = get_vertex_count(
+                mesh_shape
+            )
 
             if vertex_count <= 0:
                 raise RuntimeError(
@@ -119,7 +132,6 @@ def bind_object_closest(
                 dtype=np.int32,
             )
 
-            # Always use the actual influence order stored by skinCluster.
             influence_names = adapter.influences()
 
             if len(influence_names) < 2:
@@ -132,73 +144,62 @@ def bind_object_closest(
                 vertex_ids,
             )
 
-            joint_positions = get_world_positions(
-                influence_names,
+            solver_result = solve_segment_weights(
+                vertex_positions=vertex_positions,
+                joints=influence_names,
+                max_influences=max_influences,
+                radius_scale=1.25,
+                prune_threshold=0.0001,
+                chunk_size=4096,
             )
 
-            if vertex_positions.shape != (vertex_count, 3):
+            expected_shape = (
+                vertex_count,
+                len(influence_names),
+            )
+
+            if solver_result.weights.shape != expected_shape:
                 raise RuntimeError(
-                    "Unexpected vertex-position matrix shape: "
-                    f"{vertex_positions.shape}"
+                    "Unexpected segment-solver weight matrix shape.\n\n"
+                    f"Expected: {expected_shape}\n"
+                    f"Received: {solver_result.weights.shape}"
                 )
 
-            if joint_positions.shape != (len(influence_names), 3):
-                raise RuntimeError(
-                    "Unexpected joint-position matrix shape: "
-                    f"{joint_positions.shape}"
-                )
-
-            # Shape:
-            # delta[v, j, xyz]
-            delta = (
-                vertex_positions[:, np.newaxis, :]
-                - joint_positions[np.newaxis, :, :]
-            )
-
-            # Squared Euclidean distance.
-            # No square root is required because argmin remains identical.
-            distances_squared = np.einsum(
-                "vji,vji->vj",
-                delta,
-                delta,
-            )
-
-            closest_columns = np.argmin(
-                distances_squared,
-                axis=1,
-            ).astype(np.int32)
-
-            # Build a strict one-hot skin weight matrix.
-            weight_matrix = np.zeros(
-                (vertex_count, len(influence_names)),
-                dtype=np.float64,
-            )
-
-            weight_matrix[
-                np.arange(vertex_count),
-                closest_columns,
-            ] = 1.0
-
-            # Matrix is already normalized, so Maya normalization is disabled.
             adapter.set_weights(
                 vertex_ids=vertex_ids,
-                weights=weight_matrix,
+                weights=solver_result.weights,
                 normalize=False,
             )
 
-            # Read back from Maya instead of trusting only the source matrix.
-            result_data = adapter.get_weights(vertex_ids)
-
-            non_zero_counts = np.count_nonzero(
-                result_data.weights > 1e-8,
-                axis=1,
+            # Validate the values actually stored by Maya.
+            stored_data = adapter.get_weights(
+                vertex_ids
             )
 
-            row_sums = result_data.weights.sum(axis=1)
+            stored_weights = stored_data.weights
 
-            invalid_influence_rows = np.where(
-                non_zero_counts != 1
-            )[0]
+            if stored_weights.shape != expected_shape:
+                raise RuntimeError(
+                    "Unexpected stored skin weight matrix shape.\n\n"
+                    f"Expected: {expected_shape}\n"
+                    f"Received: {stored_weights.shape}"
+                )
+
+            if not np.all(
+                np.isfinite(stored_weights)
+            ):
+                raise RuntimeError(
+                    "Segment solver created non-finite weight values."
+                )
+
+            if np.any(stored_weights < -1e-8):
+                raise RuntimeError(
+                    "Segment solver created negative skin weights."
+                )
+
+            row_sums = stored_weights.sum(
+                axis=1,
+            )
 
             invalid_sum_rows = np.where(
                 ~np.isclose(
@@ -208,45 +209,67 @@ def bind_object_closest(
                 )
             )[0]
 
-            if invalid_influence_rows.size:
-                raise RuntimeError(
-                    "Custom Closest validation failed.\n\n"
-                    f"{invalid_influence_rows.size} vertices do not have "
-                    "exactly one influence."
-                )
-
             if invalid_sum_rows.size:
                 raise RuntimeError(
-                    "Custom Closest validation failed.\n\n"
-                    f"{invalid_sum_rows.size} vertex weight rows do not "
-                    "sum to 1.0."
+                    "Segment bind validation failed.\n\n"
+                    f"{invalid_sum_rows.size} vertex rows do not sum to 1.0."
                 )
 
-            winning_columns = np.argmax(
-                result_data.weights,
+            influence_counts = np.count_nonzero(
+                stored_weights > 1e-8,
+                axis=1,
+            )
+
+            empty_rows = np.where(
+                influence_counts < 1
+            )[0]
+
+            if empty_rows.size:
+                raise RuntimeError(
+                    "Segment bind validation failed.\n\n"
+                    f"{empty_rows.size} vertices have no weighted influence."
+                )
+
+            excessive_rows = np.where(
+                influence_counts > max_influences
+            )[0]
+
+            if excessive_rows.size:
+                raise RuntimeError(
+                    "Segment bind validation failed.\n\n"
+                    f"{excessive_rows.size} vertices exceed "
+                    f"the maximum of {max_influences} influences."
+                )
+
+            dominant_columns = np.argmax(
+                stored_weights,
                 axis=1,
             )
 
             assignment_counts = {
                 influence: int(
                     np.count_nonzero(
-                        winning_columns == column_index
+                        dominant_columns == column_index
                     )
                 )
                 for column_index, influence
-                in enumerate(result_data.influences)
+                in enumerate(stored_data.influences)
             }
 
             return ClosestObjectBindResult(
                 skin_cluster=adapter.skin_cluster,
                 mesh_transform=mesh_transform,
                 vertex_count=vertex_count,
-                influence_count=len(result_data.influences),
+                influence_count=len(stored_data.influences),
                 assignment_counts=assignment_counts,
+                segment_count=solver_result.segment_count,
+                average_influence_count=solver_result.average_influence_count,
+                max_influence_count=solver_result.max_influence_count,
+                fallback_vertex_count=solver_result.fallback_vertex_count,
             )
 
     except Exception:
-        # Avoid leaving a partial/broken skinCluster behind.
+        # Never leave an incomplete or invalid skinCluster in the scene.
         if (
             adapter is not None
             and cmds.objExists(adapter.skin_cluster)
@@ -259,15 +282,19 @@ def bind_object_closest(
                 )
             except Exception:
                 try:
-                    cmds.delete(adapter.skin_cluster)
+                    cmds.delete(
+                        adapter.skin_cluster
+                    )
                 except Exception:
                     pass
 
         raise
 
     finally:
-        _restore_scene_selection(original_selection)
-
+        _restore_scene_selection(
+            original_selection
+        )
+        
 def flood_even(selected_influences: list[str], strength: float = 1.0) -> None:
     """
     Set selected vertices so selected influences share weight evenly.

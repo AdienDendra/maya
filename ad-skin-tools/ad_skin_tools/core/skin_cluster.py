@@ -143,14 +143,18 @@ def create_closest_skin_cluster(
     mesh_shape: str,
     mesh_transform: str,
     joints: List[str],
+    max_influences: int = 5,
 ) -> SkinClusterAdapter:
     """
-    Create a skinCluster container for the custom Closest solver.
+    Create a skinCluster container for the custom segment solver.
 
-    Important:
-    Maya may generate temporary initial weights while creating the skinCluster,
-    but commands.bind_object_closest() immediately replaces every vertex row
-    with weights calculated by our own world-space distance solver.
+    Maya may generate temporary initial weights while creating the
+    skinCluster, but commands.bind_object_closest() will replace every
+    vertex row using weights calculated by segment_solver.
+
+    The solver itself enforces the maximum influence count. Maya's
+    automatic max-influence enforcement remains disabled so Maya does
+    not alter the custom weight matrix.
     """
     existing_skin = find_skin_cluster(
         mesh_shape,
@@ -166,6 +170,13 @@ def create_closest_skin_cluster(
     if not cmds.objExists(mesh_transform):
         raise SkinClusterError(
             f"Loaded mesh no longer exists: {mesh_transform}"
+        )
+
+    max_influences = int(max_influences)
+
+    if max_influences < 1:
+        raise SkinClusterError(
+            "Maximum influences must be at least 1."
         )
 
     normalized_joints = []
@@ -193,7 +204,7 @@ def create_closest_skin_cluster(
 
     if len(normalized_joints) < 2:
         raise SkinClusterError(
-            "Closest Object Bind requires at least two joints."
+            "Segment Weighted Bind requires at least two joints."
         )
 
     created = cmds.skinCluster(
@@ -201,7 +212,7 @@ def create_closest_skin_cluster(
         toSelectedBones=True,
         bindMethod=0,
         skinMethod=0,
-        maximumInfluences=1,
+        maximumInfluences=max_influences,
         obeyMaxInfluences=False,
         normalizeWeights=1,
     )
@@ -221,7 +232,7 @@ def create_closest_skin_cluster(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
-        
+           
 def _get_depend_node(node_name: str) -> om.MObject:
     selection = om.MSelectionList()
     selection.add(node_name)
