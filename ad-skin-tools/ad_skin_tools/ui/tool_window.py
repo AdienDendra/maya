@@ -12,21 +12,19 @@ from ad_skin_tools.core.skin_cluster import (
     SkinClusterError,
 )
 
-
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
 WINDOW_LABEL = "AD Skin Weights Tool"
 
-WINDOW_WIDTH = 350
-WINDOW_HEIGHT = 620
+WINDOW_WIDTH = 200
+WINDOW_HEIGHT = 600
 
 UI_MARGIN = 4
 ROW_HEIGHT = 24
 BUTTON_HEIGHT = 26
 
-LABEL_LEFT = 0
-LABEL_RIGHT = 25
-CONTROL_LEFT = 26
-CONTROL_RIGHT = 100
+LABEL_WIDTH = 94
+CONTROL_GAP = 6
+BUTTON_GAP = 4
 
 CTRL_MAIN_SCROLL = "adSkin_mainScroll"
 CTRL_MAIN_COLUMN = "adSkin_mainColumn"
@@ -36,9 +34,19 @@ CTRL_MESH_LABEL = "adSkin_meshLabel"
 CTRL_MODE_LABEL = "adSkin_modeLabel"
 CTRL_JOINT_LABEL = "adSkin_jointCountLabel"
 CTRL_JOINT_LIST = "adSkin_jointList"
+
+CTRL_SORT_MODE = "adSkin_sortMode"
 CTRL_OPERATION_MODE = "adSkin_operationMode"
+CTRL_APPLY_TO = "adSkin_applyTo"
+
 CTRL_STRENGTH = "adSkin_strength"
 CTRL_SMOOTH_ITERATIONS = "adSkin_smoothIterations"
+
+RADIO_LABEL_WIDTH = 48
+RADIO_CONTROL_GAP = 2
+RADIO_OPTION_GAP = 2
+
+_RADIO_GROUPS = {}
 
 
 _STATE = {
@@ -160,12 +168,21 @@ def _build_joints_section():
 
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
 
-    cmds.radioButtonGrp(
+    _radio_row(
+        group_key=CTRL_SORT_MODE,
         label="Sort",
-        labelArray3=["Alphabetical", "Hierarchy", "Active Only"],
-        numberOfRadioButtons=3,
-        select=2,
-        enable=False,
+        options=[
+            "Alphabetical",
+            "Hierarchy",
+            "Active Only",
+        ],
+        option_widths=[
+            110,
+            90,
+            95,
+        ],
+        selected=2,
+        enabled=False,
     )
 
     cmds.textField(
@@ -195,12 +212,6 @@ def _build_joints_section():
         height=28,
     )
 
-    cmds.button(
-        label="Show Selected Joint In List",
-        height=28,
-        command=lambda *_: show_selected_joints_in_list(),
-    )
-
     cmds.setParent("..")
     cmds.setParent("..")
 
@@ -213,29 +224,52 @@ def _build_operation_section():
         marginHeight=6,
     )
 
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=6)
+    cmds.columnLayout(
+        adjustableColumn=True,
+        rowSpacing=6,
+    )
 
-    cmds.radioButtonGrp(
-        CTRL_OPERATION_MODE,
+    _radio_row(
+        group_key=CTRL_OPERATION_MODE,
         label="Mode",
-        labelArray4=["Closest", "Even", "Smooth", "Normalize"],
-        numberOfRadioButtons=4,
-        select=1,
-        enable=False,
+        options=[
+            "Closest",
+            "Even",
+            "Smooth",
+            "Normalize",
+        ],
+        option_widths=[
+            72,
+            58,
+            78,
+            88,
+        ],
+        selected=1,
+        enabled=False,
     )
 
-    cmds.radioButtonGrp(
+    _radio_row(
+        group_key=CTRL_APPLY_TO,
         label="Apply To",
-        labelArray3=["Object", "Selected Vertices", "Soft Selection"],
-        numberOfRadioButtons=3,
-        select=1,
-        enable=False,
+        options=[
+            "Object",
+            "Selected Vertices",
+            "Soft Selection",
+        ],
+        option_widths=[
+            70,
+            118,
+            105,
+        ],
+        selected=1,
+        enabled=False,
     )
 
-    cmds.button(
-        label="Apply Operation",
+    _button_row(
+        [
+            ("Apply Operation", lambda *_: apply_operation()),
+        ],
         height=34,
-        command=lambda *_: apply_operation(),
     )
 
     cmds.setParent("..")
@@ -766,7 +800,6 @@ def _percent_row(height=ROW_HEIGHT):
         height=height,
     )
 
-
 def _attach_percent(layout, control, left, right, top=2, bottom=2):
     cmds.formLayout(
         layout,
@@ -781,46 +814,63 @@ def _attach_percent(layout, control, left, right, top=2, bottom=2):
         ],
     )
 
-
 def _label_control_row(label, control_builder, height=ROW_HEIGHT):
     """
-    Build a percentage-based row:
-    0-25%   label
-    26-100% control
+    Responsive Maya row.
+
+    Label uses a fixed gutter so it does not move when the window is resized.
+    The control stretches from the label gutter to the right edge.
     """
-    layout = _percent_row(height=height)
+    layout = cmds.formLayout(height=height)
 
     label_control = cmds.text(
         label=label,
         align="left",
+        width=LABEL_WIDTH,
     )
 
     control = control_builder()
 
-    _attach_percent(layout, label_control, LABEL_LEFT, LABEL_RIGHT)
-    _attach_percent(layout, control, CONTROL_LEFT, CONTROL_RIGHT)
+    cmds.formLayout(
+        layout,
+        edit=True,
+        attachForm=[
+            (label_control, "left", 0),
+            (label_control, "top", 2),
+            (label_control, "bottom", 2),
+            (control, "right", 0),
+            (control, "top", 2),
+            (control, "bottom", 2),
+        ],
+        attachControl=[
+            (control, "left", CONTROL_GAP, label_control),
+        ],
+    )
 
     cmds.setParent("..")
     return control
 
-
-def _button_row(buttons, height=BUTTON_HEIGHT):
+def _button_row(buttons, height=BUTTON_HEIGHT, gap=BUTTON_GAP):
     """
-    Build evenly distributed button row.
-
-    buttons:
-        [
-            ("Label", callback),
-            ("Label", callback),
-        ]
+    Build responsive percentage-based buttons with visible spacing.
     """
-    layout = _percent_row(height=height)
+    layout = cmds.formLayout(
+        numberOfDivisions=100,
+        height=height,
+    )
 
     count = len(buttons)
 
+    if count == 0:
+        cmds.setParent("..")
+        return layout
+
     for index, (label, callback) in enumerate(buttons):
-        left = int(index * 100 / count)
-        right = int((index + 1) * 100 / count)
+        left_position = int(index * 100 / count)
+        right_position = int((index + 1) * 100 / count)
+
+        left_offset = 0 if index == 0 else gap // 2
+        right_offset = 0 if index == count - 1 else gap // 2
 
         button = cmds.button(
             label=label,
@@ -828,17 +878,124 @@ def _button_row(buttons, height=BUTTON_HEIGHT):
             command=callback,
         )
 
-        _attach_percent(
+        cmds.formLayout(
             layout,
-            button,
-            left,
-            right,
-            top=1,
-            bottom=1,
+            edit=True,
+            attachForm=[
+                (button, "top", 1),
+                (button, "bottom", 1),
+            ],
+            attachPosition=[
+                (button, "left", left_offset, left_position),
+                (button, "right", right_offset, right_position),
+            ],
         )
 
     cmds.setParent("..")
     return layout
+
+def _radio_row(
+    group_key,
+    label,
+    options,
+    selected=1,
+    enabled=True,
+    option_widths=None,
+    height=ROW_HEIGHT):
+
+    """
+    Build a compact, left-aligned radio-button row.
+
+    The label and radio buttons use fixed widths.
+    They do not stretch when the window is resized.
+    Remaining space stays empty on the right.
+    """
+    if option_widths is None:
+        option_widths = [70] * len(options)
+
+    if len(option_widths) != len(options):
+        raise ValueError(
+            "option_widths count must match options count."
+        )
+
+    layout = cmds.formLayout(height=height)
+
+    label_control = cmds.text(
+        label=label,
+        align="left",
+        width=RADIO_LABEL_WIDTH,
+    )
+
+    cmds.formLayout(
+        layout,
+        edit=True,
+        attachForm=[
+            (label_control, "left", 0),
+            (label_control, "top", 1),
+            (label_control, "bottom", 1),
+        ],
+    )
+
+    collection = cmds.radioCollection()
+    buttons = []
+
+    previous_control = label_control
+
+    for index, (option_label, option_width) in enumerate(
+        zip(options, option_widths)
+    ):
+        button = cmds.radioButton(
+            label=option_label,
+            width=option_width,
+            select=(index + 1 == selected),
+            enable=enabled,
+        )
+
+        buttons.append(button)
+
+        gap = RADIO_CONTROL_GAP if index == 0 else RADIO_OPTION_GAP
+
+        cmds.formLayout(
+            layout,
+            edit=True,
+            attachForm=[
+                (button, "top", 1),
+                (button, "bottom", 1),
+            ],
+            attachControl=[
+                (button, "left", gap, previous_control),
+            ],
+        )
+
+        previous_control = button
+
+    _RADIO_GROUPS[group_key] = {
+        "collection": collection,
+        "buttons": buttons,
+    }
+
+    cmds.setParent("..")
+    return collection
+
+def _selected_radio_index(group_key):
+    group = _RADIO_GROUPS.get(group_key)
+
+    if not group:
+        return 0
+
+    selected_button = cmds.radioCollection(
+        group["collection"],
+        query=True,
+        select=True,
+    )
+
+    if not selected_button:
+        return 0
+
+    try:
+        return group["buttons"].index(selected_button) + 1
+    except ValueError:
+        return 0
 
 def _info(message: str):
     cmds.inViewMessage(
