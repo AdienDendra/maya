@@ -133,7 +133,92 @@ def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
 def has_skin_cluster(mesh_shape: str) -> bool:
     return find_skin_cluster(mesh_shape, required=False) is not None
 
+def create_closest_skin_cluster(
+    mesh_shape: str,
+    mesh_transform: str,
+    joints: List[str],
+) -> SkinClusterAdapter:
+    """
+    Create a skinCluster using Maya's Closest Distance binding.
 
+    QC-2 behaviour:
+    - mesh must not already have a skinCluster;
+    - all supplied joints become influences;
+    - each vertex receives one closest influence;
+    - future operations are allowed to create blended weights because
+      obeyMaxInfluences is disabled after the initial bind.
+    """
+    existing_skin = find_skin_cluster(
+        mesh_shape,
+        required=False,
+    )
+
+    if existing_skin:
+        raise SkinClusterError(
+            "The loaded object already has skin weights. "
+            "Object-wide Closest binding is not allowed."
+        )
+
+    if not cmds.objExists(mesh_transform):
+        raise SkinClusterError(
+            f"Loaded mesh no longer exists: {mesh_transform}"
+        )
+
+    normalized_joints = []
+    seen = set()
+
+    for joint in joints:
+        matches = cmds.ls(
+            joint,
+            long=True,
+            type="joint",
+        ) or []
+
+        if not matches:
+            raise SkinClusterError(
+                f"Joint no longer exists: {joint}"
+            )
+
+        joint_path = matches[0]
+
+        if joint_path in seen:
+            continue
+
+        seen.add(joint_path)
+        normalized_joints.append(joint_path)
+
+    if not normalized_joints:
+        raise SkinClusterError(
+            "Add at least one joint before applying Closest."
+        )
+
+    bind_objects = normalized_joints + [mesh_transform]
+
+    created = cmds.skinCluster(
+        *bind_objects,
+        toSelectedBones=True,
+        bindMethod=0,
+        skinMethod=0,
+        maximumInfluences=1,
+        obeyMaxInfluences=False,
+        normalizeWeights=1,
+    )
+
+    if isinstance(created, (list, tuple)):
+        skin_cluster = created[0]
+    else:
+        skin_cluster = created
+
+    if not skin_cluster or not cmds.objExists(skin_cluster):
+        raise SkinClusterError(
+            "Maya did not return a valid skinCluster."
+        )
+
+    return SkinClusterAdapter(
+        skin_cluster=skin_cluster,
+        mesh_shape=mesh_shape,
+    )
+    
 def _get_depend_node(node_name: str) -> om.MObject:
     selection = om.MSelectionList()
     selection.add(node_name)

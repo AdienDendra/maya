@@ -1,11 +1,19 @@
 import maya.cmds as cmds
-
-from ad_skin_tools.core.compat import ensure_numpy
-np = ensure_numpy()
+from dataclasses import dataclass
+from typing import Dict
 
 from ad_skin_tools.core.undo import undo_chunk
 from ad_skin_tools.core.selection import get_component_selection
-from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
+from ad_skin_tools.core.compat import ensure_numpy
+np = ensure_numpy()
+
+from ad_skin_tools.core.skin_cluster import (
+    SkinClusterAdapter,
+    SkinClusterError,
+    create_closest_skin_cluster,
+    find_skin_cluster,
+)
+
 from ad_skin_tools.core.influence import (
     resolve_influence_indices,
     resolve_influence_names,
@@ -23,6 +31,166 @@ from ad_skin_tools.core.weights import (
     build_closest_target,
 )
 
+@dataclass(frozen=True)
+class ClosestObjectBindResult:
+    skin_cluster: str
+    mesh_transform: str
+    vertex_count: int
+    influence_count: int
+    assignment_counts: Dict[str, int]
+
+def bind_object_closest(
+    mesh_shape: str,
+    mesh_transform: str,
+    joints: list[str],
+) -> ClosestObjectBindResult:
+    """
+    QC-2 initial Closest bind.
+
+    This command is only valid when the loaded mesh has no skinCluster.
+
+    All joints passed to this function are used. Selection in the Maya
+    viewport does not determine which joints are included.
+    """
+    if not mesh_shape or not cmds.objExists(mesh_shape):
+        raise RuntimeError(
+            "The loaded mesh shape no longer exists. "
+            "Load the mesh again."
+        )
+
+    if not mesh_transform or not cmds.objExists(mesh_transform):
+        raise RuntimeError(
+            "The loaded mesh transform no longer exists. "
+            "Load the mesh again."
+        )
+
+    existing_skin = find_skin_cluster(
+        mesh_shape,
+        required=False,
+    )
+
+    if existing_skin:
+        raise RuntimeError(
+            "This object already has skin weights.\n\n"
+            "Object-wide Closest is blocked to prevent accidental "
+            "redistribution of existing skin weights.\n\n"
+            "An already-skinned mesh must be edited through vertex selection."
+        )
+
+    if not joints:
+        raise RuntimeError(
+            "No joints are available in the window list.\n\n"
+            "Select joints in Maya and click Add Selected Joints first."
+        )
+
+    original_selection = cmds.ls(
+        selection=True,
+        long=True,
+        flatten=True,
+    ) or []
+
+    adapter = None
+
+    try:
+        with undo_chunk("AD Skin Initial Closest Bind"):
+            adapter = create_closest_skin_cluster(
+                mesh_shape=mesh_shape,
+                mesh_transform=mesh_transform,
+                joints=joints,
+            )
+
+            vertex_count = get_vertex_count(mesh_shape)
+
+            if vertex_count <= 0:
+                raise RuntimeError(
+                    "The loaded mesh has no vertices."
+                )
+
+            vertex_ids = np.arange(
+                vertex_count,
+                dtype=np.int32,
+            )
+
+            skin_data = adapter.get_weights(vertex_ids)
+
+            # QC validation:
+            # every vertex must have exactly one non-zero influence and
+            # every weight row must sum to 1.0.
+            non_zero_counts = np.count_nonzero(
+                skin_data.weights > 1e-8,
+                axis=1,
+            )
+
+            row_sums = skin_data.weights.sum(axis=1)
+
+            invalid_influence_rows = np.where(
+                non_zero_counts != 1
+            )[0]
+
+            invalid_sum_rows = np.where(
+                ~np.isclose(
+                    row_sums,
+                    1.0,
+                    atol=1e-6,
+                )
+            )[0]
+
+            if (
+                invalid_influence_rows.size > 0
+                or invalid_sum_rows.size > 0
+            ):
+                raise RuntimeError(
+                    "Closest bind validation failed.\n\n"
+                    f"Vertices without exactly one influence: "
+                    f"{invalid_influence_rows.size}\n"
+                    f"Vertices whose weights do not sum to 1.0: "
+                    f"{invalid_sum_rows.size}"
+                )
+
+            winning_columns = np.argmax(
+                skin_data.weights,
+                axis=1,
+            )
+
+            assignment_counts = {}
+
+            for column_index, influence in enumerate(
+                skin_data.influences
+            ):
+                assignment_counts[influence] = int(
+                    np.count_nonzero(
+                        winning_columns == column_index
+                    )
+                )
+
+            return ClosestObjectBindResult(
+                skin_cluster=adapter.skin_cluster,
+                mesh_transform=mesh_transform,
+                vertex_count=vertex_count,
+                influence_count=len(skin_data.influences),
+                assignment_counts=assignment_counts,
+            )
+
+    except Exception:
+        # Prevent a partially-created skinCluster from remaining after
+        # validation or API failure.
+        if (
+            adapter is not None
+            and cmds.objExists(adapter.skin_cluster)
+        ):
+            try:
+                cmds.skinCluster(
+                    adapter.skin_cluster,
+                    edit=True,
+                    unbind=True,
+                )
+            except Exception:
+                cmds.delete(adapter.skin_cluster)
+
+        raise
+
+    finally:
+        _restore_scene_selection(original_selection)
 
 def flood_even(selected_influences: list[str], strength: float = 1.0) -> None:
     """
@@ -194,3 +362,21 @@ def show_done_message(message: str) -> None:
         position="topCenter",
         fade=True,
     )
+
+def _restore_scene_selection(items):
+    """
+    Restore the artist's Maya selection after the bind operation.
+    """
+    try:
+        cmds.select(clear=True)
+
+        if items:
+            cmds.select(
+                items,
+                replace=True,
+            )
+
+    except Exception:
+        # A selected scene item may have been deleted or renamed.
+        # Selection restoration must not invalidate a successful bind.
+        pass

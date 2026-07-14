@@ -7,10 +7,12 @@ from ad_skin_tools.core.selection import (
     get_selected_joints,
 )
 from ad_skin_tools.core.compat import environment_report
+from ad_skin_tools.core import commands
 from ad_skin_tools.core.skin_cluster import (
     SkinClusterAdapter,
     SkinClusterError,
 )
+
 
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
 WINDOW_LABEL = "AD Skin Weights Tool"
@@ -438,6 +440,48 @@ def load_skin_weight(silent=False):
         if not silent:
             _show_error(exc)
 
+def _sync_loaded_skin_context():
+    """
+    Refresh the window from the mesh already stored in tool state.
+
+    Unlike Load Skin Weight, this does not depend on current Maya selection.
+    """
+    mesh_shape = _STATE.get("mesh_shape")
+    mesh_transform = _STATE.get("mesh_transform")
+
+    if not mesh_shape or not cmds.objExists(mesh_shape):
+        raise RuntimeError(
+            "Loaded mesh no longer exists."
+        )
+
+    adapter = SkinClusterAdapter.from_mesh(mesh_shape)
+    joints = adapter.influences()
+
+    _STATE["skin_cluster"] = adapter.skin_cluster
+    _STATE["has_skin_cluster"] = True
+    _STATE["joints"] = list(joints)
+    _STATE["component_selection"] = None
+
+    _set_option_menu_items(
+        CTRL_SKIN_MENU,
+        [adapter.skin_cluster],
+    )
+
+    _set_joint_list(joints)
+    _update_joint_count_label()
+
+    cmds.text(
+        CTRL_MESH_LABEL,
+        edit=True,
+        label=f"Mesh: {mesh_transform}",
+    )
+
+    cmds.text(
+        CTRL_MODE_LABEL,
+        edit=True,
+        label="Mode: Object loaded with skinCluster",
+    )
+
 def refresh_from_selection(silent=False):
     """
     Backward-compatible alias during QC transition.
@@ -615,43 +659,95 @@ def _clear_tool_context():
 
 def apply_operation():
     """
-    Disabled for QC-1.
-
-    QC-1 only validates:
-    - Load Skin Weight
-    - mesh with skinCluster
-    - mesh without skinCluster
-    - add/remove joint list
+    QC-2:
+    Initial object-wide Closest bind for a mesh without skinCluster.
     """
-    message = (
-        "Apply Operation is temporarily disabled.\n\n"
-        "QC-1 only tests Load Skin Weight and Joint List management."
-    )
+    try:
+        _require_loaded_mesh()
 
-    cmds.warning(message)
-    cmds.confirmDialog(
-        title="AD Skin Tools QC-1",
-        message=message,
-        button=["OK"],
-    )
+        operation_mode = _selected_radio_index(
+            CTRL_OPERATION_MODE
+        )
+
+        apply_to_mode = _selected_radio_index(
+            CTRL_APPLY_TO
+        )
+
+        if operation_mode != 1:
+            raise RuntimeError(
+                "QC-2 only supports Closest mode."
+            )
+
+        if apply_to_mode != 1:
+            raise RuntimeError(
+                "QC-2 only supports Object mode."
+            )
+
+        if _STATE.get("has_skin_cluster"):
+            raise RuntimeError(
+                "This object already has skin weights.\n\n"
+                "Object-wide Closest is blocked to prevent accidental "
+                "redistribution of existing skin weights.\n\n"
+                "Select vertices when vertex editing is introduced in QC-3."
+            )
+
+        joints = list(
+            _STATE.get("joints", [])
+        )
+
+        if not joints:
+            raise RuntimeError(
+                "No joints are available in the window list.\n\n"
+                "Select one or more joints in Maya and click "
+                "Add Selected Joints first."
+            )
+
+        result = commands.bind_object_closest(
+            mesh_shape=_STATE["mesh_shape"],
+            mesh_transform=_STATE["mesh_transform"],
+            joints=joints,
+        )
+
+        _sync_loaded_skin_context()
+
+        print("\n[AD Skin Tools] QC-2 Closest Bind")
+        print(f"Skin Cluster: {result.skin_cluster}")
+        print(f"Mesh: {result.mesh_transform}")
+        print(f"Vertices: {result.vertex_count}")
+        print(f"Influences: {result.influence_count}")
+        print("Vertex assignments:")
+
+        for influence, count in result.assignment_counts.items():
+            print(f"  {influence}: {count}")
+
+        _info(
+            f"Closest bind complete: "
+            f"{result.vertex_count} vertices, "
+            f"{result.influence_count} joints."
+        )
+
+    except Exception as exc:
+        _show_error(exc)
 
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
         message=(
-            "QC-1 Workflow:\n\n"
-            "1. Select a mesh object.\n"
+            "QC-2 Workflow:\n\n"
+            "1. Select an unskinned mesh object.\n"
             "2. Click Load Skin Weight.\n"
-            "3. If the mesh has a skinCluster, existing joints will appear.\n"
-            "4. If there is no skinCluster, the mesh still loads.\n"
-            "5. Select joints in Maya.\n"
-            "6. Click Add Selected Joints.\n"
-            "7. Use Remove Selected or Remove All to edit the list.\n\n"
-            "Apply Operation is disabled for this QC pass."
+            "3. Select one or more joints in Maya.\n"
+            "4. Click Add Selected Joints.\n"
+            "5. Click Apply Operation.\n\n"
+            "Closest Object Bind:\n"
+            "- Creates a new skinCluster.\n"
+            "- Uses every joint in the window list.\n"
+            "- Assigns each vertex to one closest joint.\n"
+            "- Blocks object-wide operations when skin weights already exist."
         ),
         button=["OK"],
     )
-
+    
 def show_environment_report():
     cmds.confirmDialog(
         title="AD Skin Tools Environment",
