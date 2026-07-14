@@ -48,8 +48,14 @@ class SkinClusterAdapter:
         return cls(skin_cluster=skin_cluster, mesh_shape=mesh_shape)
 
     def influences(self) -> List[str]:
+        """
+        Return full DAG paths.
+
+        Full paths are required so duplicate joint names remain unambiguous.
+        The UI is responsible for displaying shorter readable labels.
+        """
         paths = self.skin_fn.influenceObjects()
-        return [path.partialPathName() for path in paths]
+        return [path.fullPathName() for path in paths]
 
     def get_weights(self, vertex_ids: np.ndarray) -> SkinData:
         vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
@@ -139,14 +145,12 @@ def create_closest_skin_cluster(
     joints: List[str],
 ) -> SkinClusterAdapter:
     """
-    Create a skinCluster using Maya's Closest Distance binding.
+    Create a skinCluster container for the custom Closest solver.
 
-    QC-2 behaviour:
-    - mesh must not already have a skinCluster;
-    - all supplied joints become influences;
-    - each vertex receives one closest influence;
-    - future operations are allowed to create blended weights because
-      obeyMaxInfluences is disabled after the initial bind.
+    Important:
+    Maya may generate temporary initial weights while creating the skinCluster,
+    but commands.bind_object_closest() immediately replaces every vertex row
+    with weights calculated by our own world-space distance solver.
     """
     existing_skin = find_skin_cluster(
         mesh_shape,
@@ -187,15 +191,13 @@ def create_closest_skin_cluster(
         seen.add(joint_path)
         normalized_joints.append(joint_path)
 
-    if not normalized_joints:
+    if len(normalized_joints) < 2:
         raise SkinClusterError(
-            "Add at least one joint before applying Closest."
+            "Closest Object Bind requires at least two joints."
         )
 
-    bind_objects = normalized_joints + [mesh_transform]
-
     created = cmds.skinCluster(
-        *bind_objects,
+        *(normalized_joints + [mesh_transform]),
         toSelectedBones=True,
         bindMethod=0,
         skinMethod=0,
@@ -204,10 +206,11 @@ def create_closest_skin_cluster(
         normalizeWeights=1,
     )
 
-    if isinstance(created, (list, tuple)):
-        skin_cluster = created[0]
-    else:
-        skin_cluster = created
+    skin_cluster = (
+        created[0]
+        if isinstance(created, (list, tuple))
+        else created
+    )
 
     if not skin_cluster or not cmds.objExists(skin_cluster):
         raise SkinClusterError(
@@ -218,7 +221,7 @@ def create_closest_skin_cluster(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
-    
+        
 def _get_depend_node(node_name: str) -> om.MObject:
     selection = om.MSelectionList()
     selection.add(node_name)

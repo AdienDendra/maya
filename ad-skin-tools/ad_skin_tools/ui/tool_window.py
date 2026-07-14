@@ -660,46 +660,33 @@ def _clear_tool_context():
 def apply_operation():
     """
     QC-2:
-    Initial object-wide Closest bind for a mesh without skinCluster.
+    Custom object-wide Closest bind for an unskinned mesh.
+
+    QC-2 intentionally ignores disabled radio controls because only:
+        Mode     = Closest
+        Apply To = Object
+    are available.
     """
     try:
         _require_loaded_mesh()
-
-        operation_mode = _selected_radio_index(
-            CTRL_OPERATION_MODE
-        )
-
-        apply_to_mode = _selected_radio_index(
-            CTRL_APPLY_TO
-        )
-
-        if operation_mode != 1:
-            raise RuntimeError(
-                "QC-2 only supports Closest mode."
-            )
-
-        if apply_to_mode != 1:
-            raise RuntimeError(
-                "QC-2 only supports Object mode."
-            )
 
         if _STATE.get("has_skin_cluster"):
             raise RuntimeError(
                 "This object already has skin weights.\n\n"
                 "Object-wide Closest is blocked to prevent accidental "
                 "redistribution of existing skin weights.\n\n"
-                "Select vertices when vertex editing is introduced in QC-3."
+                "Existing skin weights can only be edited through "
+                "vertex selection."
             )
 
         joints = list(
             _STATE.get("joints", [])
         )
 
-        if not joints:
+        if len(joints) < 2:
             raise RuntimeError(
-                "No joints are available in the window list.\n\n"
-                "Select one or more joints in Maya and click "
-                "Add Selected Joints first."
+                "Closest Object Bind requires at least two joints.\n\n"
+                "Select joints in Maya and click Add Selected Joints."
             )
 
         result = commands.bind_object_closest(
@@ -710,7 +697,7 @@ def apply_operation():
 
         _sync_loaded_skin_context()
 
-        print("\n[AD Skin Tools] QC-2 Closest Bind")
+        print("\n[AD Skin Tools] Custom Closest Object Bind")
         print(f"Skin Cluster: {result.skin_cluster}")
         print(f"Mesh: {result.mesh_transform}")
         print(f"Vertices: {result.vertex_count}")
@@ -722,13 +709,13 @@ def apply_operation():
 
         _info(
             f"Closest bind complete: "
-            f"{result.vertex_count} vertices, "
+            f"{result.vertex_count} vertices assigned across "
             f"{result.influence_count} joints."
         )
 
     except Exception as exc:
         _show_error(exc)
-
+        
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
@@ -1074,24 +1061,33 @@ def _radio_row(
     return collection
 
 def _selected_radio_index(group_key):
+    """
+    Query each radioButton directly.
+
+    radioCollection can return a fully-qualified UI path while the stored
+    button names may be short names, causing the old list.index() lookup
+    to return zero.
+    """
     group = _RADIO_GROUPS.get(group_key)
 
     if not group:
         return 0
 
-    selected_button = cmds.radioCollection(
-        group["collection"],
-        query=True,
-        select=True,
-    )
+    for index, button in enumerate(
+        group["buttons"],
+        start=1,
+    ):
+        if not cmds.radioButton(button, exists=True):
+            continue
 
-    if not selected_button:
-        return 0
+        if cmds.radioButton(
+            button,
+            query=True,
+            select=True,
+        ):
+            return index
 
-    try:
-        return group["buttons"].index(selected_button) + 1
-    except ValueError:
-        return 0
+    return 0
 
 def _info(message: str):
     cmds.inViewMessage(

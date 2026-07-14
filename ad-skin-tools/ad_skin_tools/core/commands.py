@@ -45,12 +45,20 @@ def bind_object_closest(
     joints: list[str],
 ) -> ClosestObjectBindResult:
     """
-    QC-2 initial Closest bind.
+    Create a skinCluster and assign every mesh vertex to its closest joint.
 
-    This command is only valid when the loaded mesh has no skinCluster.
+    Distance calculation is performed by this tool, not by Maya's automatic
+    skin binding:
 
-    All joints passed to this function are used. Selection in the Maya
-    viewport does not determine which joints are included.
+        closest = argmin(
+            squared_world_distance(vertex, joint)
+        )
+
+    Each vertex receives exactly:
+        closest joint = 1.0
+        all other joints = 0.0
+
+    Exact-distance ties are resolved deterministically by influence-list order.
     """
     if not mesh_shape or not cmds.objExists(mesh_shape):
         raise RuntimeError(
@@ -77,10 +85,10 @@ def bind_object_closest(
             "An already-skinned mesh must be edited through vertex selection."
         )
 
-    if not joints:
+    if len(joints) < 2:
         raise RuntimeError(
-            "No joints are available in the window list.\n\n"
-            "Select joints in Maya and click Add Selected Joints first."
+            "Closest Object Bind requires at least two joints.\n\n"
+            "Select joints in Maya and click Add Selected Joints."
         )
 
     original_selection = cmds.ls(
@@ -111,17 +119,82 @@ def bind_object_closest(
                 dtype=np.int32,
             )
 
-            skin_data = adapter.get_weights(vertex_ids)
+            # Always use the actual influence order stored by skinCluster.
+            influence_names = adapter.influences()
 
-            # QC validation:
-            # every vertex must have exactly one non-zero influence and
-            # every weight row must sum to 1.0.
+            if len(influence_names) < 2:
+                raise RuntimeError(
+                    "The created skinCluster contains fewer than two influences."
+                )
+
+            vertex_positions = get_vertex_positions(
+                mesh_shape,
+                vertex_ids,
+            )
+
+            joint_positions = get_world_positions(
+                influence_names,
+            )
+
+            if vertex_positions.shape != (vertex_count, 3):
+                raise RuntimeError(
+                    "Unexpected vertex-position matrix shape: "
+                    f"{vertex_positions.shape}"
+                )
+
+            if joint_positions.shape != (len(influence_names), 3):
+                raise RuntimeError(
+                    "Unexpected joint-position matrix shape: "
+                    f"{joint_positions.shape}"
+                )
+
+            # Shape:
+            # delta[v, j, xyz]
+            delta = (
+                vertex_positions[:, np.newaxis, :]
+                - joint_positions[np.newaxis, :, :]
+            )
+
+            # Squared Euclidean distance.
+            # No square root is required because argmin remains identical.
+            distances_squared = np.einsum(
+                "vji,vji->vj",
+                delta,
+                delta,
+            )
+
+            closest_columns = np.argmin(
+                distances_squared,
+                axis=1,
+            ).astype(np.int32)
+
+            # Build a strict one-hot skin weight matrix.
+            weight_matrix = np.zeros(
+                (vertex_count, len(influence_names)),
+                dtype=np.float64,
+            )
+
+            weight_matrix[
+                np.arange(vertex_count),
+                closest_columns,
+            ] = 1.0
+
+            # Matrix is already normalized, so Maya normalization is disabled.
+            adapter.set_weights(
+                vertex_ids=vertex_ids,
+                weights=weight_matrix,
+                normalize=False,
+            )
+
+            # Read back from Maya instead of trusting only the source matrix.
+            result_data = adapter.get_weights(vertex_ids)
+
             non_zero_counts = np.count_nonzero(
-                skin_data.weights > 1e-8,
+                result_data.weights > 1e-8,
                 axis=1,
             )
 
-            row_sums = skin_data.weights.sum(axis=1)
+            row_sums = result_data.weights.sum(axis=1)
 
             invalid_influence_rows = np.where(
                 non_zero_counts != 1
@@ -135,45 +208,45 @@ def bind_object_closest(
                 )
             )[0]
 
-            if (
-                invalid_influence_rows.size > 0
-                or invalid_sum_rows.size > 0
-            ):
+            if invalid_influence_rows.size:
                 raise RuntimeError(
-                    "Closest bind validation failed.\n\n"
-                    f"Vertices without exactly one influence: "
-                    f"{invalid_influence_rows.size}\n"
-                    f"Vertices whose weights do not sum to 1.0: "
-                    f"{invalid_sum_rows.size}"
+                    "Custom Closest validation failed.\n\n"
+                    f"{invalid_influence_rows.size} vertices do not have "
+                    "exactly one influence."
+                )
+
+            if invalid_sum_rows.size:
+                raise RuntimeError(
+                    "Custom Closest validation failed.\n\n"
+                    f"{invalid_sum_rows.size} vertex weight rows do not "
+                    "sum to 1.0."
                 )
 
             winning_columns = np.argmax(
-                skin_data.weights,
+                result_data.weights,
                 axis=1,
             )
 
-            assignment_counts = {}
-
-            for column_index, influence in enumerate(
-                skin_data.influences
-            ):
-                assignment_counts[influence] = int(
+            assignment_counts = {
+                influence: int(
                     np.count_nonzero(
                         winning_columns == column_index
                     )
                 )
+                for column_index, influence
+                in enumerate(result_data.influences)
+            }
 
             return ClosestObjectBindResult(
                 skin_cluster=adapter.skin_cluster,
                 mesh_transform=mesh_transform,
                 vertex_count=vertex_count,
-                influence_count=len(skin_data.influences),
+                influence_count=len(result_data.influences),
                 assignment_counts=assignment_counts,
             )
 
     except Exception:
-        # Prevent a partially-created skinCluster from remaining after
-        # validation or API failure.
+        # Avoid leaving a partial/broken skinCluster behind.
         if (
             adapter is not None
             and cmds.objExists(adapter.skin_cluster)
@@ -185,7 +258,10 @@ def bind_object_closest(
                     unbind=True,
                 )
             except Exception:
-                cmds.delete(adapter.skin_cluster)
+                try:
+                    cmds.delete(adapter.skin_cluster)
+                except Exception:
+                    pass
 
         raise
 
