@@ -1,0 +1,147 @@
+from dataclasses import dataclass
+from typing import List, Optional
+
+import maya.api.OpenMaya as om
+import maya.api.OpenMayaAnim as oma
+import maya.cmds as cmds
+
+from ad_skin_tools.core.compat import ensure_numpy
+from ad_skin_tools.core import mesh
+
+np = ensure_numpy()
+
+
+class SkinClusterError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SkinData:
+    skin_cluster: str
+    mesh_shape: str
+    vertex_ids: np.ndarray
+    influences: List[str]
+    weights: np.ndarray
+
+
+class SkinClusterAdapter:
+    """
+    Small API wrapper around Maya skinCluster.
+
+    Responsibility:
+    - find skinCluster
+    - read influence list
+    - read weight matrix
+    - write weight matrix
+    """
+
+    def __init__(self, skin_cluster: str, mesh_shape: str):
+        self.skin_cluster = skin_cluster
+        self.mesh_shape = mesh_shape
+        self.mesh_dag_path = mesh.get_dag_path(mesh_shape)
+        self.skin_object = _get_depend_node(skin_cluster)
+        self.skin_fn = oma.MFnSkinCluster(self.skin_object)
+
+    @classmethod
+    def from_mesh(cls, mesh_shape: str) -> "SkinClusterAdapter":
+        skin_cluster = find_skin_cluster(mesh_shape, required=True)
+        return cls(skin_cluster=skin_cluster, mesh_shape=mesh_shape)
+
+    def influences(self) -> List[str]:
+        paths = self.skin_fn.influenceObjects()
+        return [path.partialPathName() for path in paths]
+
+    def get_weights(self, vertex_ids: np.ndarray) -> SkinData:
+        vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
+        component = _make_vertex_component(vertex_ids)
+
+        flat_weights, influence_count = self.skin_fn.getWeights(
+            self.mesh_dag_path,
+            component,
+        )
+
+        weights = np.array(flat_weights, dtype=np.float64).reshape(
+            len(vertex_ids),
+            int(influence_count),
+        )
+
+        return SkinData(
+            skin_cluster=self.skin_cluster,
+            mesh_shape=self.mesh_shape,
+            vertex_ids=vertex_ids,
+            influences=self.influences(),
+            weights=weights,
+        )
+
+    def set_weights(
+        self,
+        vertex_ids: np.ndarray,
+        weights: np.ndarray,
+        normalize: bool = True,
+    ) -> None:
+        vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
+        weights = np.asarray(weights, dtype=np.float64)
+
+        if weights.ndim != 2:
+            raise SkinClusterError("Weights must be a 2D matrix.")
+
+        if weights.shape[0] != len(vertex_ids):
+            raise SkinClusterError(
+                f"Weight row count does not match vertex count: "
+                f"{weights.shape[0]} != {len(vertex_ids)}"
+            )
+
+        component = _make_vertex_component(vertex_ids)
+
+        influence_count = weights.shape[1]
+        influence_indices = om.MIntArray(list(range(influence_count)))
+        flat_weights = om.MDoubleArray(weights.ravel().tolist())
+
+        self.skin_fn.setWeights(
+            self.mesh_dag_path,
+            component,
+            influence_indices,
+            flat_weights,
+            normalize,
+        )
+
+
+def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
+    """
+    Find skinCluster from mesh history.
+
+    required=True:
+        Raise SkinClusterError if not found.
+
+    required=False:
+        Return None if not found.
+    """
+    history = cmds.listHistory(mesh_shape, pruneDagObjects=True) or []
+    skin_clusters = [
+        node for node in history
+        if cmds.nodeType(node) == "skinCluster"
+    ]
+
+    if not skin_clusters:
+        if required:
+            raise SkinClusterError(f"No skinCluster found on mesh: {mesh_shape}")
+        return None
+
+    return skin_clusters[0]
+
+
+def has_skin_cluster(mesh_shape: str) -> bool:
+    return find_skin_cluster(mesh_shape, required=False) is not None
+
+
+def _get_depend_node(node_name: str) -> om.MObject:
+    selection = om.MSelectionList()
+    selection.add(node_name)
+    return selection.getDependNode(0)
+
+
+def _make_vertex_component(vertex_ids: np.ndarray) -> om.MObject:
+    component_fn = om.MFnSingleIndexedComponent()
+    component = component_fn.create(om.MFn.kMeshVertComponent)
+    component_fn.addElements([int(v) for v in vertex_ids])
+    return component
