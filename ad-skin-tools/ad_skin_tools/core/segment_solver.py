@@ -491,19 +491,6 @@ def _solve_surface_segment_weights(
         radius_scale=radius_scale,
     )
 
-    surface_seeds = _build_surface_seeds(
-        vertex_positions=vertex_positions,
-        adjacency=adjacency,
-        segment_data=segment_data,
-    )
-
-    if surface_seeds.count == 0:
-        raise RuntimeError(
-            "No surface seeds could be generated from the joint segments."
-        )
-
-    # Segment candidates are internal. We retain more candidates than the
-    # final joint limit because adjacent segments often share endpoint joints.
     candidate_segment_count = min(
         segment_data.count,
         max(
@@ -511,6 +498,18 @@ def _solve_surface_segment_weights(
             max_influences * 4,
         ),
     )
+
+    surface_seeds = _build_surface_seeds(
+        vertex_positions=vertex_positions,
+        adjacency=adjacency,
+        segment_data=segment_data,
+        max_segment_candidates=candidate_segment_count,
+    )
+
+    if surface_seeds.count == 0:
+        raise RuntimeError(
+            "No surface seeds could be generated from the joint segments."
+        )
 
     surface_result = compute_top_k_surface_distances(
         adjacency=adjacency,
@@ -527,13 +526,11 @@ def _solve_surface_segment_weights(
         )
 
         raise RuntimeError(
-            "Surface Segment Bind could not reach every vertex.\n\n"
+            "Internal surface seed coverage failure.\n\n"
             f"Unreachable vertices: {unreachable_count}\n\n"
-            "Every disconnected mesh shell must have at least one nearby "
-            "joint segment. Verify that joints for both sides or all shells "
-            "were added to the influence list."
+            "Shell-aware seeding failed to initialize part of the mesh."
         )
-
+        
     joint_count = len(
         joint_paths
     )
@@ -776,24 +773,51 @@ def _build_surface_seeds(
     vertex_positions: np.ndarray,
     adjacency,
     segment_data: _SegmentData,
+    max_segment_candidates: int,
     seed_spacing_scale: float = 1.5,
     seeds_per_sample: int = 8,
     max_samples_per_segment: int = 48,
 ) -> _SurfaceSeedData:
     """
-    Sample every bone segment and map those samples to nearby surface vertices.
+    Generate bone-segment seeds independently for every disconnected shell.
 
-    Several nearby vertices may be used for one sample. This reduces
-    directional bias when a bone lies near the centre of a cylindrical limb.
+    Each mesh shell:
+    - identifies nearby bone segments;
+    - receives its own surface seeds;
+    - propagates weights only through its own connected topology.
+
+    This prevents one disconnected arm shell from being treated as
+    unreachable merely because another shell received the first seeds.
     """
+    vertex_positions = np.asarray(
+        vertex_positions,
+        dtype=np.float64,
+    )
+
     reference_edge_length = _get_reference_edge_length(
         adjacency
     )
 
     sample_spacing = max(
-        reference_edge_length
-        * float(seed_spacing_scale),
+        reference_edge_length * float(seed_spacing_scale),
         1e-6,
+    )
+
+    components = _get_connected_components(
+        adjacency
+    )
+
+    if not components:
+        raise RuntimeError(
+            "No connected mesh components were found."
+        )
+
+    max_segment_candidates = max(
+        1,
+        min(
+            int(max_segment_candidates),
+            segment_data.count,
+        ),
     )
 
     # key:
@@ -803,9 +827,325 @@ def _build_surface_seeds(
     #     (initial_cost, segment_t)
     best_seed_by_segment_vertex = {}
 
+    for component_vertex_ids in components:
+        component_vertex_ids = np.asarray(
+            component_vertex_ids,
+            dtype=np.int32,
+        )
+
+        component_positions = vertex_positions[
+            component_vertex_ids
+        ]
+
+        ranked_segments = _rank_segments_for_component(
+            component_positions=component_positions,
+            segment_data=segment_data,
+        )
+
+        selected_segments = _select_component_segments(
+            ranked_segments=ranked_segments,
+            component_positions=component_positions,
+            reference_edge_length=reference_edge_length,
+            max_segment_candidates=max_segment_candidates,
+        )
+
+        _add_component_surface_seeds(
+            component_vertex_ids=component_vertex_ids,
+            component_positions=component_positions,
+            selected_segment_indices=selected_segments,
+            segment_data=segment_data,
+            sample_spacing=sample_spacing,
+            seeds_per_sample=seeds_per_sample,
+            max_samples_per_segment=max_samples_per_segment,
+            reference_edge_length=reference_edge_length,
+            seed_store=best_seed_by_segment_vertex,
+        )
+
+    sorted_entries = sorted(
+        (
+            (
+                segment_index,
+                vertex_id,
+                initial_cost,
+                segment_t,
+            )
+            for (
+                segment_index,
+                vertex_id,
+            ), (
+                initial_cost,
+                segment_t,
+            ) in best_seed_by_segment_vertex.items()
+        ),
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
+            item[3],
+        ),
+    )
+
+    return _SurfaceSeedData(
+        vertex_ids=np.asarray(
+            [
+                entry[1]
+                for entry in sorted_entries
+            ],
+            dtype=np.int32,
+        ),
+        segment_indices=np.asarray(
+            [
+                entry[0]
+                for entry in sorted_entries
+            ],
+            dtype=np.int32,
+        ),
+        initial_costs=np.asarray(
+            [
+                entry[2]
+                for entry in sorted_entries
+            ],
+            dtype=np.float64,
+        ),
+        segment_parameters=np.asarray(
+            [
+                entry[3]
+                for entry in sorted_entries
+            ],
+            dtype=np.float64,
+        ),
+    )
+
+def _get_connected_components(
+    adjacency,
+) -> List[np.ndarray]:
+    """
+    Return disconnected mesh shells as vertex-ID arrays.
+    """
+    vertex_count = len(adjacency)
+
+    visited = np.zeros(
+        vertex_count,
+        dtype=bool,
+    )
+
+    components = []
+
+    for start_vertex in range(vertex_count):
+        if visited[start_vertex]:
+            continue
+
+        stack = [start_vertex]
+        visited[start_vertex] = True
+        component = []
+
+        while stack:
+            vertex_id = stack.pop()
+            component.append(vertex_id)
+
+            for neighbor_id, _ in adjacency[vertex_id]:
+                neighbor_id = int(neighbor_id)
+
+                if visited[neighbor_id]:
+                    continue
+
+                visited[neighbor_id] = True
+                stack.append(neighbor_id)
+
+        components.append(
+            np.asarray(
+                component,
+                dtype=np.int32,
+            )
+        )
+
+    return components
+
+def _rank_segments_for_component(
+    component_positions: np.ndarray,
+    segment_data: _SegmentData,
+):
+    """
+    Rank segments by their closest world-space distance to one mesh shell.
+
+    World-space distance is used only to decide which bones belong near
+    the shell. Actual weight propagation remains surface/geodesic.
+    """
+    ranked = []
+    epsilon = 1e-12
+
     for segment_index in range(
         segment_data.count
     ):
+        segment_start = segment_data.starts[
+            segment_index
+        ]
+
+        segment_vector = segment_data.vectors[
+            segment_index
+        ]
+
+        length_squared = float(
+            segment_data.lengths_squared[
+                segment_index
+            ]
+        )
+
+        relative = (
+            component_positions
+            - segment_start[np.newaxis, :]
+        )
+
+        if length_squared <= epsilon:
+            closest_points = np.broadcast_to(
+                segment_start,
+                component_positions.shape,
+            )
+        else:
+            segment_t = np.matmul(
+                relative,
+                segment_vector,
+            ) / length_squared
+
+            segment_t = np.clip(
+                segment_t,
+                0.0,
+                1.0,
+            )
+
+            closest_points = (
+                segment_start[np.newaxis, :]
+                + segment_t[:, np.newaxis]
+                * segment_vector[np.newaxis, :]
+            )
+
+        delta = (
+            component_positions
+            - closest_points
+        )
+
+        distances_squared = np.einsum(
+            "ij,ij->i",
+            delta,
+            delta,
+        )
+
+        ranked.append(
+            (
+                segment_index,
+                float(
+                    distances_squared.min()
+                ),
+            )
+        )
+
+    ranked.sort(
+        key=lambda item: (
+            item[1],
+            item[0],
+        )
+    )
+
+    return ranked
+
+def _select_component_segments(
+    ranked_segments,
+    component_positions: np.ndarray,
+    reference_edge_length: float,
+    max_segment_candidates: int,
+) -> List[int]:
+    """
+    Keep segments spatially relevant to this particular mesh shell.
+
+    The threshold is relative to:
+    - closest segment distance;
+    - average topology scale;
+    - shell bounding-box size.
+    """
+    if not ranked_segments:
+        raise RuntimeError(
+            "No bone segments are available for a mesh shell."
+        )
+
+    shell_extent = float(
+        np.linalg.norm(
+            component_positions.max(axis=0)
+            - component_positions.min(axis=0)
+        )
+    )
+
+    closest_distance = float(
+        np.sqrt(
+            max(
+                ranked_segments[0][1],
+                0.0,
+            )
+        )
+    )
+
+    selection_margin = max(
+        reference_edge_length * 6.0,
+        shell_extent * 0.25,
+    )
+
+    distance_limit = (
+        closest_distance
+        + selection_margin
+    )
+
+    selected = []
+
+    for segment_index, distance_squared in ranked_segments:
+        distance = float(
+            np.sqrt(
+                max(
+                    distance_squared,
+                    0.0,
+                )
+            )
+        )
+
+        if distance > distance_limit:
+            continue
+
+        selected.append(
+            int(segment_index)
+        )
+
+        if len(selected) >= max_segment_candidates:
+            break
+
+    # Every shell must have at least one candidate.
+    if not selected:
+        selected.append(
+            int(ranked_segments[0][0])
+        )
+
+    return selected
+
+def _add_component_surface_seeds(
+    component_vertex_ids: np.ndarray,
+    component_positions: np.ndarray,
+    selected_segment_indices: List[int],
+    segment_data: _SegmentData,
+    sample_spacing: float,
+    seeds_per_sample: int,
+    max_samples_per_segment: int,
+    reference_edge_length: float,
+    seed_store: dict,
+) -> None:
+    """
+    Sample selected bone segments and map samples only to vertices belonging
+    to the current connected shell.
+    """
+    component_vertex_count = int(
+        component_vertex_ids.size
+    )
+
+    if component_vertex_count == 0:
+        return
+
+    for segment_index in selected_segment_indices:
         segment_start = segment_data.starts[
             segment_index
         ]
@@ -826,7 +1166,7 @@ def _build_surface_seeds(
         )
 
         if segment_length <= 1e-10:
-            sample_parameters = np.array(
+            sample_parameters = np.asarray(
                 [0.0],
                 dtype=np.float64,
             )
@@ -864,7 +1204,7 @@ def _build_surface_seeds(
             sample_parameters,
         ):
             delta = (
-                vertex_positions
+                component_positions
                 - sample_position[np.newaxis, :]
             )
 
@@ -876,24 +1216,24 @@ def _build_surface_seeds(
 
             candidate_count = min(
                 int(seeds_per_sample),
-                vertex_positions.shape[0],
+                component_vertex_count,
             )
 
-            if candidate_count == vertex_positions.shape[0]:
-                candidate_vertices = np.arange(
-                    vertex_positions.shape[0],
+            if candidate_count == component_vertex_count:
+                local_candidate_indices = np.arange(
+                    component_vertex_count,
                     dtype=np.int32,
                 )
             else:
-                candidate_vertices = np.argpartition(
+                local_candidate_indices = np.argpartition(
                     distances_squared,
                     candidate_count - 1,
                 )[:candidate_count]
 
-            candidate_vertices = candidate_vertices[
+            local_candidate_indices = local_candidate_indices[
                 np.argsort(
                     distances_squared[
-                        candidate_vertices
+                        local_candidate_indices
                     ],
                     kind="stable",
                 )
@@ -901,7 +1241,7 @@ def _build_surface_seeds(
 
             candidate_distances = np.sqrt(
                 distances_squared[
-                    candidate_vertices
+                    local_candidate_indices
                 ]
             )
 
@@ -909,9 +1249,6 @@ def _build_surface_seeds(
                 candidate_distances[0]
             )
 
-            # Keep a narrow surface band around the closest candidates.
-            # This captures several vertices around a finger cross-section
-            # without reaching across to another finger.
             distance_band = max(
                 reference_edge_length * 0.75,
                 minimum_distance * 0.08,
@@ -922,34 +1259,38 @@ def _build_surface_seeds(
                 + distance_band
             )
 
-            accepted = candidate_vertices[
+            accepted_local_indices = local_candidate_indices[
                 candidate_distances
                 <= allowed_distance
             ]
 
-            if accepted.size == 0:
-                accepted = candidate_vertices[:1]
+            if accepted_local_indices.size == 0:
+                accepted_local_indices = (
+                    local_candidate_indices[:1]
+                )
 
-            for vertex_id in accepted:
+            for local_vertex_index in accepted_local_indices:
+                local_vertex_index = int(
+                    local_vertex_index
+                )
+
                 vertex_id = int(
-                    vertex_id
+                    component_vertex_ids[
+                        local_vertex_index
+                    ]
                 )
 
                 initial_cost = float(
                     np.sqrt(
                         distances_squared[
-                            vertex_id
+                            local_vertex_index
                         ]
                     )
                 )
 
                 key = (
-                    segment_index,
+                    int(segment_index),
                     vertex_id,
-                )
-
-                existing = best_seed_by_segment_vertex.get(
-                    key
                 )
 
                 candidate_value = (
@@ -957,81 +1298,27 @@ def _build_surface_seeds(
                     float(segment_t),
                 )
 
+                existing = seed_store.get(
+                    key
+                )
+
                 if existing is None:
-                    best_seed_by_segment_vertex[
-                        key
-                    ] = candidate_value
+                    seed_store[key] = candidate_value
                     continue
 
                 existing_cost, existing_t = existing
 
                 if initial_cost < existing_cost - 1e-12:
-                    best_seed_by_segment_vertex[
-                        key
-                    ] = candidate_value
+                    seed_store[key] = candidate_value
+
                 elif (
-                    abs(initial_cost - existing_cost)
-                    <= 1e-12
+                    abs(
+                        initial_cost
+                        - existing_cost
+                    ) <= 1e-12
                     and segment_t < existing_t
                 ):
-                    best_seed_by_segment_vertex[
-                        key
-                    ] = candidate_value
-
-    sorted_entries = sorted(
-        (
-            (
-                segment_index,
-                vertex_id,
-                initial_cost,
-                segment_t,
-            )
-            for (
-                segment_index,
-                vertex_id,
-            ), (
-                initial_cost,
-                segment_t,
-            ) in best_seed_by_segment_vertex.items()
-        ),
-        key=lambda item: (
-            item[0],
-            item[1],
-            item[2],
-            item[3],
-        ),
-    )
-
-    return _SurfaceSeedData(
-        vertex_ids=np.array(
-            [
-                entry[1]
-                for entry in sorted_entries
-            ],
-            dtype=np.int32,
-        ),
-        segment_indices=np.array(
-            [
-                entry[0]
-                for entry in sorted_entries
-            ],
-            dtype=np.int32,
-        ),
-        initial_costs=np.array(
-            [
-                entry[2]
-                for entry in sorted_entries
-            ],
-            dtype=np.float64,
-        ),
-        segment_parameters=np.array(
-            [
-                entry[3]
-                for entry in sorted_entries
-            ],
-            dtype=np.float64,
-        ),
-    )
+                    seed_store[key] = candidate_value
 
 def _get_reference_edge_length(
     adjacency,
