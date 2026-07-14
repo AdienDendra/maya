@@ -5,6 +5,9 @@ import maya.cmds as cmds
 
 from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.mesh import get_world_positions
+from ad_skin_tools.core.surface_distance import (
+    compute_top_k_surface_distances,
+)
 
 np = ensure_numpy()
 
@@ -31,8 +34,73 @@ class _SegmentData:
     def count(self) -> int:
         return int(self.start_indices.size)
 
+@dataclass(frozen=True)
+class _SurfaceSeedData:
+    vertex_ids: np.ndarray
+    segment_indices: np.ndarray
+    initial_costs: np.ndarray
+    segment_parameters: np.ndarray
+
+    @property
+    def count(self) -> int:
+        return int(self.vertex_ids.size)
 
 def solve_segment_weights(
+    vertex_positions: np.ndarray,
+    joints: List[str],
+    max_influences: int = 5,
+    radius_scale: float = 1.25,
+    prune_threshold: float = 0.0001,
+    chunk_size: int = 4096,
+    adjacency=None,
+    distance_mode: str = "surface",
+) -> SegmentSolveResult:
+    """
+    Dispatch segment weighting by distance mode.
+
+    volume:
+        Straight world-space distance. Fast, but may cross gaps between
+        nearby surfaces.
+
+    surface:
+        Geodesic distance through connected mesh edges. This behaves like
+        Maya Soft Selection Surface falloff and prevents direct propagation
+        between neighboring fingers.
+    """
+    distance_mode = str(
+        distance_mode
+    ).strip().lower()
+
+    if distance_mode == "volume":
+        return _solve_volume_segment_weights(
+            vertex_positions=vertex_positions,
+            joints=joints,
+            max_influences=max_influences,
+            radius_scale=radius_scale,
+            prune_threshold=prune_threshold,
+            chunk_size=chunk_size,
+        )
+
+    if distance_mode == "surface":
+        if adjacency is None:
+            raise ValueError(
+                "Surface distance mode requires weighted mesh adjacency."
+            )
+
+        return _solve_surface_segment_weights(
+            vertex_positions=vertex_positions,
+            joints=joints,
+            adjacency=adjacency,
+            max_influences=max_influences,
+            radius_scale=radius_scale,
+            prune_threshold=prune_threshold,
+        )
+
+    raise ValueError(
+        f"Unsupported segment distance mode: {distance_mode}"
+    )
+
+def _solve_volume_segment_weights(
     vertex_positions: np.ndarray,
     joints: List[str],
     max_influences: int = 5,
@@ -351,6 +419,332 @@ def solve_segment_weights(
         ),
     )
 
+def _solve_surface_segment_weights(
+    vertex_positions: np.ndarray,
+    joints: List[str],
+    adjacency,
+    max_influences: int = 5,
+    radius_scale: float = 1.25,
+    prune_threshold: float = 0.0001,
+) -> SegmentSolveResult:
+    """
+    Calculate bone-segment weights using surface/geodesic distance.
+
+    Workflow:
+    1. Build bone segments from the selected joint hierarchy.
+    2. Sample points along every segment.
+    3. Map samples to nearby mesh vertices.
+    4. Propagate segment labels through connected mesh edges.
+    5. Convert segment scores into endpoint-joint weights.
+    6. Keep the strongest max_influences and normalize.
+    """
+    vertex_positions = np.asarray(
+        vertex_positions,
+        dtype=np.float64,
+    )
+
+    if vertex_positions.ndim != 2 or vertex_positions.shape[1] != 3:
+        raise ValueError(
+            "vertex_positions must have shape (vertex_count, 3)."
+        )
+
+    vertex_count = int(
+        vertex_positions.shape[0]
+    )
+
+    if len(adjacency) != vertex_count:
+        raise ValueError(
+            "Surface adjacency size does not match vertex count: "
+            f"{len(adjacency)} != {vertex_count}"
+        )
+
+    joint_paths = _normalize_joint_paths(
+        joints
+    )
+
+    if len(joint_paths) < 2:
+        raise ValueError(
+            "Surface Segment Bind requires at least two joints."
+        )
+
+    max_influences = int(
+        max_influences
+    )
+
+    if max_influences < 1:
+        raise ValueError(
+            "max_influences must be at least 1."
+        )
+
+    joint_positions = get_world_positions(
+        joint_paths
+    )
+
+    segment_pairs = _build_segment_pairs(
+        joint_paths
+    )
+
+    segment_data = _build_segment_data(
+        segment_pairs=segment_pairs,
+        joint_positions=joint_positions,
+        vertex_positions=vertex_positions,
+        radius_scale=radius_scale,
+    )
+
+    surface_seeds = _build_surface_seeds(
+        vertex_positions=vertex_positions,
+        adjacency=adjacency,
+        segment_data=segment_data,
+    )
+
+    if surface_seeds.count == 0:
+        raise RuntimeError(
+            "No surface seeds could be generated from the joint segments."
+        )
+
+    # Segment candidates are internal. We retain more candidates than the
+    # final joint limit because adjacent segments often share endpoint joints.
+    candidate_segment_count = min(
+        segment_data.count,
+        max(
+            12,
+            max_influences * 4,
+        ),
+    )
+
+    surface_result = compute_top_k_surface_distances(
+        adjacency=adjacency,
+        seed_vertex_ids=surface_seeds.vertex_ids.tolist(),
+        seed_label_indices=surface_seeds.segment_indices.tolist(),
+        seed_costs=surface_seeds.initial_costs.tolist(),
+        max_labels=candidate_segment_count,
+    )
+
+    if surface_result.reached_vertex_count != vertex_count:
+        unreachable_count = (
+            vertex_count
+            - surface_result.reached_vertex_count
+        )
+
+        raise RuntimeError(
+            "Surface Segment Bind could not reach every vertex.\n\n"
+            f"Unreachable vertices: {unreachable_count}\n\n"
+            "Every disconnected mesh shell must have at least one nearby "
+            "joint segment. Verify that joints for both sides or all shells "
+            "were added to the influence list."
+        )
+
+    joint_count = len(
+        joint_paths
+    )
+
+    joint_scores = np.zeros(
+        (vertex_count, joint_count),
+        dtype=np.float64,
+    )
+
+    candidate_labels = (
+        surface_result.label_indices
+    )
+
+    candidate_sources = (
+        surface_result.source_indices
+    )
+
+    candidate_distances = (
+        surface_result.distances
+    )
+
+    valid_candidates = (
+        candidate_labels >= 0
+    ) & np.isfinite(
+        candidate_distances
+    )
+
+    for candidate_column in range(
+        candidate_labels.shape[1]
+    ):
+        valid_rows = np.where(
+            valid_candidates[:, candidate_column]
+        )[0]
+
+        if valid_rows.size == 0:
+            continue
+
+        segment_indices = candidate_labels[
+            valid_rows,
+            candidate_column,
+        ]
+
+        source_indices = candidate_sources[
+            valid_rows,
+            candidate_column,
+        ]
+
+        distances = candidate_distances[
+            valid_rows,
+            candidate_column,
+        ]
+
+        radii = segment_data.radii[
+            segment_indices
+        ]
+
+        normalized_distance = (
+            distances / radii
+        )
+
+        # Wendland C2 compact-support kernel.
+        support = np.clip(
+            1.0 - normalized_distance,
+            0.0,
+            1.0,
+        )
+
+        kernel = (
+            np.power(support, 4.0)
+            * (4.0 * normalized_distance + 1.0)
+        )
+
+        kernel[
+            normalized_distance >= 1.0
+        ] = 0.0
+
+        segment_t = surface_seeds.segment_parameters[
+            source_indices
+        ]
+
+        smooth_t = (
+            segment_t
+            * segment_t
+            * (3.0 - 2.0 * segment_t)
+        )
+
+        start_joint_indices = segment_data.start_indices[
+            segment_indices
+        ]
+
+        end_joint_indices = segment_data.end_indices[
+            segment_indices
+        ]
+
+        start_scores = (
+            kernel * (1.0 - smooth_t)
+        )
+
+        end_scores = (
+            kernel * smooth_t
+        )
+
+        np.maximum.at(
+            joint_scores,
+            (
+                valid_rows,
+                start_joint_indices,
+            ),
+            start_scores,
+        )
+
+        np.maximum.at(
+            joint_scores,
+            (
+                valid_rows,
+                end_joint_indices,
+            ),
+            end_scores,
+        )
+
+    # A compact kernel may reject every candidate on a remote vertex.
+    # Fall back only to its nearest SURFACE segment, never volume distance.
+    score_sums = joint_scores.sum(
+        axis=1
+    )
+
+    fallback_rows = np.where(
+        score_sums <= 1e-12
+    )[0]
+
+    for vertex_id in fallback_rows:
+        segment_index = int(
+            candidate_labels[vertex_id, 0]
+        )
+
+        source_index = int(
+            candidate_sources[vertex_id, 0]
+        )
+
+        if segment_index < 0 or source_index < 0:
+            raise RuntimeError(
+                f"No valid surface candidate for vertex {vertex_id}."
+            )
+
+        segment_t = float(
+            surface_seeds.segment_parameters[
+                source_index
+            ]
+        )
+
+        smooth_t = (
+            segment_t
+            * segment_t
+            * (3.0 - 2.0 * segment_t)
+        )
+
+        start_joint_index = int(
+            segment_data.start_indices[
+                segment_index
+            ]
+        )
+
+        end_joint_index = int(
+            segment_data.end_indices[
+                segment_index
+            ]
+        )
+
+        if start_joint_index == end_joint_index:
+            joint_scores[
+                vertex_id,
+                start_joint_index,
+            ] = 1.0
+        else:
+            joint_scores[
+                vertex_id,
+                start_joint_index,
+            ] = 1.0 - smooth_t
+
+            joint_scores[
+                vertex_id,
+                end_joint_index,
+            ] = smooth_t
+
+    final_weights = _keep_top_influences(
+        scores=joint_scores,
+        max_influences=min(
+            max_influences,
+            joint_count,
+        ),
+        prune_threshold=prune_threshold,
+    )
+
+    influence_counts = np.count_nonzero(
+        final_weights > 1e-8,
+        axis=1,
+    )
+
+    return SegmentSolveResult(
+        weights=final_weights,
+        segment_count=segment_data.count,
+        fallback_vertex_count=int(
+            fallback_rows.size
+        ),
+        average_influence_count=float(
+            influence_counts.mean()
+        ),
+        max_influence_count=int(
+            influence_counts.max()
+        ),
+    )
 
 def _normalize_joint_paths(joints: List[str]) -> List[str]:
     result = []
@@ -378,6 +772,304 @@ def _normalize_joint_paths(joints: List[str]) -> List[str]:
 
     return result
 
+def _build_surface_seeds(
+    vertex_positions: np.ndarray,
+    adjacency,
+    segment_data: _SegmentData,
+    seed_spacing_scale: float = 1.5,
+    seeds_per_sample: int = 8,
+    max_samples_per_segment: int = 48,
+) -> _SurfaceSeedData:
+    """
+    Sample every bone segment and map those samples to nearby surface vertices.
+
+    Several nearby vertices may be used for one sample. This reduces
+    directional bias when a bone lies near the centre of a cylindrical limb.
+    """
+    reference_edge_length = _get_reference_edge_length(
+        adjacency
+    )
+
+    sample_spacing = max(
+        reference_edge_length
+        * float(seed_spacing_scale),
+        1e-6,
+    )
+
+    # key:
+    #     (segment_index, vertex_id)
+    #
+    # value:
+    #     (initial_cost, segment_t)
+    best_seed_by_segment_vertex = {}
+
+    for segment_index in range(
+        segment_data.count
+    ):
+        segment_start = segment_data.starts[
+            segment_index
+        ]
+
+        segment_vector = segment_data.vectors[
+            segment_index
+        ]
+
+        segment_length = float(
+            np.sqrt(
+                max(
+                    segment_data.lengths_squared[
+                        segment_index
+                    ],
+                    0.0,
+                )
+            )
+        )
+
+        if segment_length <= 1e-10:
+            sample_parameters = np.array(
+                [0.0],
+                dtype=np.float64,
+            )
+        else:
+            sample_count = int(
+                np.ceil(
+                    segment_length
+                    / sample_spacing
+                )
+            ) + 1
+
+            sample_count = max(
+                3,
+                min(
+                    sample_count,
+                    int(max_samples_per_segment),
+                ),
+            )
+
+            sample_parameters = np.linspace(
+                0.0,
+                1.0,
+                sample_count,
+                dtype=np.float64,
+            )
+
+        sample_positions = (
+            segment_start[np.newaxis, :]
+            + sample_parameters[:, np.newaxis]
+            * segment_vector[np.newaxis, :]
+        )
+
+        for sample_position, segment_t in zip(
+            sample_positions,
+            sample_parameters,
+        ):
+            delta = (
+                vertex_positions
+                - sample_position[np.newaxis, :]
+            )
+
+            distances_squared = np.einsum(
+                "ij,ij->i",
+                delta,
+                delta,
+            )
+
+            candidate_count = min(
+                int(seeds_per_sample),
+                vertex_positions.shape[0],
+            )
+
+            if candidate_count == vertex_positions.shape[0]:
+                candidate_vertices = np.arange(
+                    vertex_positions.shape[0],
+                    dtype=np.int32,
+                )
+            else:
+                candidate_vertices = np.argpartition(
+                    distances_squared,
+                    candidate_count - 1,
+                )[:candidate_count]
+
+            candidate_vertices = candidate_vertices[
+                np.argsort(
+                    distances_squared[
+                        candidate_vertices
+                    ],
+                    kind="stable",
+                )
+            ]
+
+            candidate_distances = np.sqrt(
+                distances_squared[
+                    candidate_vertices
+                ]
+            )
+
+            minimum_distance = float(
+                candidate_distances[0]
+            )
+
+            # Keep a narrow surface band around the closest candidates.
+            # This captures several vertices around a finger cross-section
+            # without reaching across to another finger.
+            distance_band = max(
+                reference_edge_length * 0.75,
+                minimum_distance * 0.08,
+            )
+
+            allowed_distance = (
+                minimum_distance
+                + distance_band
+            )
+
+            accepted = candidate_vertices[
+                candidate_distances
+                <= allowed_distance
+            ]
+
+            if accepted.size == 0:
+                accepted = candidate_vertices[:1]
+
+            for vertex_id in accepted:
+                vertex_id = int(
+                    vertex_id
+                )
+
+                initial_cost = float(
+                    np.sqrt(
+                        distances_squared[
+                            vertex_id
+                        ]
+                    )
+                )
+
+                key = (
+                    segment_index,
+                    vertex_id,
+                )
+
+                existing = best_seed_by_segment_vertex.get(
+                    key
+                )
+
+                candidate_value = (
+                    initial_cost,
+                    float(segment_t),
+                )
+
+                if existing is None:
+                    best_seed_by_segment_vertex[
+                        key
+                    ] = candidate_value
+                    continue
+
+                existing_cost, existing_t = existing
+
+                if initial_cost < existing_cost - 1e-12:
+                    best_seed_by_segment_vertex[
+                        key
+                    ] = candidate_value
+                elif (
+                    abs(initial_cost - existing_cost)
+                    <= 1e-12
+                    and segment_t < existing_t
+                ):
+                    best_seed_by_segment_vertex[
+                        key
+                    ] = candidate_value
+
+    sorted_entries = sorted(
+        (
+            (
+                segment_index,
+                vertex_id,
+                initial_cost,
+                segment_t,
+            )
+            for (
+                segment_index,
+                vertex_id,
+            ), (
+                initial_cost,
+                segment_t,
+            ) in best_seed_by_segment_vertex.items()
+        ),
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
+            item[3],
+        ),
+    )
+
+    return _SurfaceSeedData(
+        vertex_ids=np.array(
+            [
+                entry[1]
+                for entry in sorted_entries
+            ],
+            dtype=np.int32,
+        ),
+        segment_indices=np.array(
+            [
+                entry[0]
+                for entry in sorted_entries
+            ],
+            dtype=np.int32,
+        ),
+        initial_costs=np.array(
+            [
+                entry[2]
+                for entry in sorted_entries
+            ],
+            dtype=np.float64,
+        ),
+        segment_parameters=np.array(
+            [
+                entry[3]
+                for entry in sorted_entries
+            ],
+            dtype=np.float64,
+        ),
+    )
+
+def _get_reference_edge_length(
+    adjacency,
+) -> float:
+    """
+    Return the median unique mesh-edge length.
+    """
+    edge_lengths = []
+
+    for vertex_id, neighbors in enumerate(
+        adjacency
+    ):
+        for neighbor_id, edge_length in neighbors:
+            if int(neighbor_id) <= vertex_id:
+                continue
+
+            edge_length = float(
+                edge_length
+            )
+
+            if edge_length > 1e-12:
+                edge_lengths.append(
+                    edge_length
+                )
+
+    if not edge_lengths:
+        raise RuntimeError(
+            "Mesh surface graph contains no valid edges."
+        )
+
+    return float(
+        np.median(
+            np.asarray(
+                edge_lengths,
+                dtype=np.float64,
+            )
+        )
+    )
 
 def _build_segment_pairs(
     joints: List[str],

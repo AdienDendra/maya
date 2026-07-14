@@ -9,10 +9,10 @@ def reload_modules():
     import ad_skin_tools.core.skin_cluster as skin_cluster
     import ad_skin_tools.core.influence as influence
     import ad_skin_tools.core.weights as weights
-    import ad_skin_tools.core.commands as commands
-    import ad_skin_tools.ui.tool_window as tool_window
+    import ad_skin_tools.core.surface_distance as surface_distance
     import ad_skin_tools.core.segment_solver as segment_solver
     import ad_skin_tools.core.commands as commands
+    import ad_skin_tools.ui.tool_window as tool_window
 
     for module in [
         compat,

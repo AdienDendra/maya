@@ -19,17 +19,31 @@ from ad_skin_tools.core.influence import (
     resolve_influence_indices,
     resolve_influence_names,
 )
+
 from ad_skin_tools.core.mesh import (
     get_vertex_positions,
     get_world_positions,
     get_vertex_count,
     get_all_vertex_neighbors,
 )
+
 from ad_skin_tools.core.weights import (
     normalize_rows,
     blend_by_falloff,
     build_even_target,
     build_closest_target,
+)
+
+from ad_skin_tools.core.mesh import (
+    get_vertex_positions,
+    get_world_positions,
+    get_vertex_count,
+    get_all_vertex_neighbors,
+    get_weighted_vertex_neighbors,
+)
+
+surface_adjacency = get_weighted_vertex_neighbors(
+    mesh_shape
 )
 
 @dataclass(frozen=True)
@@ -143,7 +157,7 @@ def bind_object_closest(
                 mesh_shape,
                 vertex_ids,
             )
-
+            
             solver_result = solve_segment_weights(
                 vertex_positions=vertex_positions,
                 joints=influence_names,
@@ -151,6 +165,8 @@ def bind_object_closest(
                 radius_scale=1.25,
                 prune_threshold=0.0001,
                 chunk_size=4096,
+                adjacency=surface_adjacency,
+                distance_mode="surface",
             )
 
             expected_shape = (

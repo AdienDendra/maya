@@ -59,7 +59,92 @@ def get_all_vertex_neighbors(mesh_shape: str) -> List[List[int]]:
 
     return neighbors
 
+def get_weighted_vertex_neighbors(
+    mesh_shape: str,
+) -> List[List[tuple[int, float]]]:
+    """
+    Build a weighted graph from the mesh topology.
 
+    Each vertex stores:
+        [
+            (connected_vertex_id, world_space_edge_length),
+            ...
+        ]
+
+    The edge length becomes the traversal cost for surface/geodesic
+    distance calculations.
+
+    Unlike world-space volume distance, propagation can only travel
+    through actual connected mesh edges.
+    """
+    dag_path = get_dag_path(mesh_shape)
+    mesh_fn = om.MFnMesh(dag_path)
+
+    points = mesh_fn.getPoints(
+        om.MSpace.kWorld
+    )
+
+    vertex_count = int(
+        mesh_fn.numVertices
+    )
+
+    adjacency = [
+        []
+        for _ in range(vertex_count)
+    ]
+
+    iterator = om.MItMeshVertex(
+        dag_path
+    )
+
+    minimum_edge_length = 1e-12
+
+    while not iterator.isDone():
+        vertex_id = int(
+            iterator.index()
+        )
+
+        source_point = points[vertex_id]
+
+        connected_vertices = iterator.getConnectedVertices()
+
+        weighted_neighbors = []
+
+        for neighbor_id in connected_vertices:
+            neighbor_id = int(
+                neighbor_id
+            )
+
+            target_point = points[neighbor_id]
+
+            delta_x = target_point.x - source_point.x
+            delta_y = target_point.y - source_point.y
+            delta_z = target_point.z - source_point.z
+
+            edge_length = (
+                delta_x * delta_x
+                + delta_y * delta_y
+                + delta_z * delta_z
+            ) ** 0.5
+
+            edge_length = max(
+                float(edge_length),
+                minimum_edge_length,
+            )
+
+            weighted_neighbors.append(
+                (
+                    neighbor_id,
+                    edge_length,
+                )
+            )
+
+        adjacency[vertex_id] = weighted_neighbors
+
+        iterator.next()
+
+    return adjacency
+    
 def get_world_positions(nodes: list[str]) -> np.ndarray:
     positions = []
 
