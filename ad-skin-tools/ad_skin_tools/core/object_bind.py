@@ -35,11 +35,11 @@ def bind_object_native(
     options: Optional[NativeBindOptions] = None,
 ) -> NativeObjectBindResult:
     """
-    Create and validate an initial object bind using Maya's native solver.
+    Create and validate a Maya Closest Distance initial object bind.
 
-    This is the v2.5 command boundary used by the UI. Native Maya creates
-    the weights; MFnSkinCluster reads them back so the result can be checked
-    before the operation is reported as successful.
+    Maya calculates the weights. MFnSkinCluster reads the stored result back
+    so AD Skin Tool can validate data integrity before reporting completion.
+    This validation does not judge deformation or anatomical quality.
     """
     if not mesh_shape or not cmds.objExists(mesh_shape):
         raise RuntimeError(
@@ -61,7 +61,7 @@ def bind_object_native(
     created_skin_cluster = None
 
     try:
-        with undo_chunk("AD Skin Native Object Bind"):
+        with undo_chunk("AD Skin Closest Distance Bind"):
             native_result = create_native_bind(
                 mesh_transform=mesh_transform,
                 joints=joints,
@@ -157,7 +157,7 @@ def _validate_stored_weights(
 
     if weights.shape != expected_shape:
         raise RuntimeError(
-            "Unexpected native bind weight matrix shape.\n\n"
+            "Unexpected Closest Distance weight matrix shape.\n\n"
             f"Expected: {expected_shape}\n"
             f"Received: {weights.shape}"
         )
@@ -169,7 +169,7 @@ def _validate_stored_weights(
             )
         )
         raise RuntimeError(
-            "Maya native binding produced non-finite weights.\n\n"
+            "Maya Closest Distance produced non-finite weights.\n\n"
             f"Invalid rows: {invalid_row_count}"
         )
 
@@ -180,7 +180,7 @@ def _validate_stored_weights(
             )
         )
         raise RuntimeError(
-            "Maya native binding produced negative weights.\n\n"
+            "Maya Closest Distance produced negative weights.\n\n"
             f"Invalid rows: {negative_row_count}"
         )
 
@@ -195,7 +195,7 @@ def _validate_stored_weights(
 
     if invalid_sum_rows.size:
         raise RuntimeError(
-            "Native object bind validation failed.\n\n"
+            "Closest Distance data validation failed.\n\n"
             f"{invalid_sum_rows.size} vertex rows do not sum to 1.0."
         )
 
@@ -209,7 +209,7 @@ def _validate_stored_weights(
 
     if empty_rows.size:
         raise RuntimeError(
-            "Native object bind validation failed.\n\n"
+            "Closest Distance data validation failed.\n\n"
             f"{empty_rows.size} vertices have no influence."
         )
 
@@ -220,7 +220,7 @@ def _validate_stored_weights(
 
         if excessive_rows.size:
             raise RuntimeError(
-                "Native object bind validation failed.\n\n"
+                "Closest Distance data validation failed.\n\n"
                 f"{excessive_rows.size} vertices exceed the requested "
                 f"maximum of {max_influences} influences."
             )
