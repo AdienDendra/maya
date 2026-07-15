@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import maya.cmds as cmds
 
@@ -16,6 +16,7 @@ class OwnershipSolveResult:
     segment_count: int
     point_count: int
     smooth_iterations: int
+    opposite_pair_count: int
     average_influence_count: float
     max_influence_count: int
     hard_assignment_counts: np.ndarray
@@ -47,6 +48,7 @@ def solve_closest_ownership_weights(
     vertex_positions: np.ndarray,
     joints: Sequence[str],
     neighbors: List[List[int]],
+    vertex_normals: Optional[np.ndarray] = None,
     smooth_iterations: int = 4,
     max_influences: int = 5,
     prune_threshold: float = 0.0001,
@@ -54,7 +56,11 @@ def solve_closest_ownership_weights(
     endpoint_inset: float = 0.001,
     distance_chunk_size: int = 8192,
     smoothing_chunk_size: int = 2048,
+    opposite_normal_dot_threshold: float = -0.7,
+    opposite_distance_scale: float = 3.0,
+    pair_chunk_size: int = 256,
 ) -> OwnershipSolveResult:
+
     """
     Build initial skin weights using hard closest ownership followed by
     controlled topology relaxation.
@@ -69,6 +75,58 @@ def solve_closest_ownership_weights(
     ownership boundaries without propagating labels across empty space.
     """
     vertex_positions = np.asarray(vertex_positions, dtype=np.float64)
+
+    if pair_chunk_size < 1:
+        raise ValueError(
+            "pair_chunk_size must be at least 1."
+        )
+
+    if not (
+        -1.0
+        <= opposite_normal_dot_threshold
+        <= 1.0
+    ):
+        raise ValueError(
+            "opposite_normal_dot_threshold must be "
+            "between -1.0 and 1.0."
+        )
+
+    if opposite_distance_scale <= 0.0:
+        raise ValueError(
+            "opposite_distance_scale must be greater than 0."
+        )
+
+    if vertex_normals is not None:
+        vertex_normals = np.asarray(
+            vertex_normals,
+            dtype=np.float64,
+        )
+
+        if vertex_normals.shape != vertex_positions.shape:
+            raise ValueError(
+                "vertex_normals must have the same shape "
+                "as vertex_positions."
+            )
+
+        normal_lengths = np.linalg.norm(
+            vertex_normals,
+            axis=1,
+            keepdims=True,
+        )
+
+        invalid_normals = (
+            normal_lengths[:, 0] <= 1e-12
+        )
+
+        if np.any(invalid_normals):
+            raise ValueError(
+                "vertex_normals contains zero-length normals."
+            )
+
+        vertex_normals = (
+            vertex_normals
+            / normal_lengths
+        )
 
     if vertex_positions.ndim != 2 or vertex_positions.shape[1] != 3:
         raise ValueError(
@@ -149,15 +207,39 @@ def solve_closest_ownership_weights(
         owner_indices,
     ] = 1.0
 
+    opposite_pairs = np.empty(
+        (0, 2),
+        dtype=np.int32,
+    )
+
     if smooth_iterations:
-        neighbor_indices, neighbor_counts = _build_neighbor_matrix(
-            neighbors
+        neighbor_indices, neighbor_counts = (
+            _build_neighbor_matrix(
+                neighbors
+            )
         )
+
+        if vertex_normals is not None:
+            opposite_pairs = (
+                _build_opposite_vertex_pairs(
+                    vertex_positions=vertex_positions,
+                    vertex_normals=vertex_normals,
+                    neighbors=neighbors,
+                    normal_dot_threshold=(
+                        opposite_normal_dot_threshold
+                    ),
+                    distance_scale=(
+                        opposite_distance_scale
+                    ),
+                    chunk_size=pair_chunk_size,
+                )
+            )
 
         weights = _relax_weights(
             weights=weights,
             neighbor_indices=neighbor_indices,
             neighbor_counts=neighbor_counts,
+            opposite_pairs=opposite_pairs,
             iterations=smooth_iterations,
             chunk_size=smoothing_chunk_size,
         )
@@ -179,9 +261,18 @@ def solve_closest_ownership_weights(
         segment_count=primitives.segment_count,
         point_count=primitives.point_count,
         smooth_iterations=smooth_iterations,
-        average_influence_count=float(influence_counts.mean()),
-        max_influence_count=int(influence_counts.max()),
-        hard_assignment_counts=hard_assignment_counts,
+        opposite_pair_count=int(
+            opposite_pairs.shape[0]
+        ),
+        average_influence_count=float(
+            influence_counts.mean()
+        ),
+        max_influence_count=int(
+            influence_counts.max()
+        ),
+        hard_assignment_counts=(
+            hard_assignment_counts
+        ),
     )
 
 
@@ -688,6 +779,237 @@ def _pairwise_squared_distances(
 
     return distances_squared
 
+def _build_opposite_vertex_pairs(
+    vertex_positions: np.ndarray,
+    vertex_normals: np.ndarray,
+    neighbors: List[List[int]],
+    normal_dot_threshold: float,
+    distance_scale: float,
+    chunk_size: int,
+) -> np.ndarray:
+    """
+    Find simple one-to-one opposite vertex pairs.
+
+    A candidate must:
+    - be spatially close;
+    - not be the source vertex;
+    - not be a direct topology neighbor;
+    - have an opposing normal;
+    - choose the source vertex back as its closest candidate.
+
+    No barycentric interpolation or face raycasting is used.
+    """
+    vertex_count = int(
+        vertex_positions.shape[0]
+    )
+
+    median_edge_length = (
+        _get_median_edge_length(
+            vertex_positions=vertex_positions,
+            neighbors=neighbors,
+        )
+    )
+
+    maximum_distance = (
+        median_edge_length
+        * float(distance_scale)
+    )
+
+    maximum_distance_squared = (
+        maximum_distance
+        * maximum_distance
+    )
+
+    nearest_candidates = np.full(
+        vertex_count,
+        -1,
+        dtype=np.int32,
+    )
+
+    for start_row in range(
+        0,
+        vertex_count,
+        chunk_size,
+    ):
+        end_row = min(
+            start_row + chunk_size,
+            vertex_count,
+        )
+
+        chunk_positions = vertex_positions[
+            start_row:end_row
+        ]
+
+        distances_squared = (
+            _pairwise_squared_distances(
+                chunk_positions,
+                vertex_positions,
+            )
+        )
+
+        normal_dots = np.matmul(
+            vertex_normals[start_row:end_row],
+            vertex_normals.T,
+        )
+
+        distances_squared[
+            normal_dots
+            > normal_dot_threshold
+        ] = np.inf
+
+        distances_squared[
+            distances_squared
+            > maximum_distance_squared
+        ] = np.inf
+
+        for local_row, vertex_id in enumerate(
+            range(start_row, end_row)
+        ):
+            # Never pair a vertex with itself.
+            distances_squared[
+                local_row,
+                vertex_id,
+            ] = np.inf
+
+            # Direct topology neighbors belong to the same surface patch.
+            connected_vertices = neighbors[
+                vertex_id
+            ]
+
+            if connected_vertices:
+                distances_squared[
+                    local_row,
+                    np.asarray(
+                        connected_vertices,
+                        dtype=np.int32,
+                    ),
+                ] = np.inf
+
+        best_indices = np.argmin(
+            distances_squared,
+            axis=1,
+        ).astype(np.int32)
+
+        best_distances = np.take_along_axis(
+            distances_squared,
+            best_indices[:, np.newaxis],
+            axis=1,
+        )[:, 0]
+
+        valid_rows = np.isfinite(
+            best_distances
+        )
+
+        chunk_result = nearest_candidates[
+            start_row:end_row
+        ]
+
+        chunk_result[valid_rows] = (
+            best_indices[valid_rows]
+        )
+
+    # Keep only reciprocal one-to-one matches:
+    #
+    # A chooses B
+    # B chooses A
+    pairs = []
+
+    for vertex_a in range(vertex_count):
+        vertex_b = int(
+            nearest_candidates[
+                vertex_a
+            ]
+        )
+
+        if vertex_b < 0:
+            continue
+
+        if vertex_b <= vertex_a:
+            continue
+
+        if (
+            int(
+                nearest_candidates[
+                    vertex_b
+                ]
+            )
+            != vertex_a
+        ):
+            continue
+
+        pairs.append(
+            (
+                vertex_a,
+                vertex_b,
+            )
+        )
+
+    if not pairs:
+        return np.empty(
+            (0, 2),
+            dtype=np.int32,
+        )
+
+    return np.asarray(
+        pairs,
+        dtype=np.int32,
+    ).reshape(-1, 2)
+
+def _get_median_edge_length(
+    vertex_positions: np.ndarray,
+    neighbors: List[List[int]],
+) -> float:
+    """
+    Estimate local mesh scale using the median unique edge length.
+    """
+    edge_lengths = []
+
+    for vertex_id, connected_vertices in enumerate(
+        neighbors
+    ):
+        source_position = vertex_positions[
+            vertex_id
+        ]
+
+        for neighbor_id in connected_vertices:
+            neighbor_id = int(
+                neighbor_id
+            )
+
+            # Count every undirected edge once.
+            if neighbor_id <= vertex_id:
+                continue
+
+            delta = (
+                vertex_positions[neighbor_id]
+                - source_position
+            )
+
+            length = float(
+                np.linalg.norm(
+                    delta
+                )
+            )
+
+            if length > 1e-12:
+                edge_lengths.append(
+                    length
+                )
+
+    if not edge_lengths:
+        raise RuntimeError(
+            "Cannot estimate opposite-pair distance: "
+            "the mesh contains no valid topology edges."
+        )
+
+    return float(
+        np.median(
+            np.asarray(
+                edge_lengths,
+                dtype=np.float64,
+            )
+        )
+    )
 
 def _build_neighbor_matrix(
     neighbors: List[List[int]],
@@ -745,6 +1067,7 @@ def _relax_weights(
     weights: np.ndarray,
     neighbor_indices: np.ndarray,
     neighbor_counts: np.ndarray,
+    opposite_pairs: np.ndarray,
     iterations: int,
     chunk_size: int,
 ) -> np.ndarray:
@@ -775,6 +1098,30 @@ def _relax_weights(
                     np.newaxis,
                 ]
             )
+            
+            if opposite_pairs.size:
+                pair_a = opposite_pairs[
+                    :,
+                    0,
+                ]
+
+                pair_b = opposite_pairs[
+                    :,
+                    1,
+                ]
+
+                paired_average = (
+                    next_weights[pair_a]
+                    + next_weights[pair_b]
+                ) * 0.5
+
+                next_weights[
+                    pair_a
+                ] = paired_average
+
+                next_weights[
+                    pair_b
+                ] = paired_average
 
         current = next_weights
 
