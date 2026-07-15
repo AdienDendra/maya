@@ -64,6 +64,7 @@ _STATE = {
     "component_selection": None,
 }
 
+
 def _delete_existing_workspace():
     if cmds.workspaceControl(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
@@ -73,6 +74,7 @@ def _delete_existing_workspace():
             cmds.workspaceControlState(WINDOW_NAME, remove=True)
     except Exception:
         pass
+
 
 def show(auto_refresh=False):
     _delete_existing_workspace()
@@ -122,6 +124,7 @@ def show(auto_refresh=False):
     if auto_refresh:
         load_skin_weight(silent=True)
 
+
 def _build_header():
     _button_row(
         [
@@ -130,6 +133,7 @@ def _build_header():
         ],
         height=BUTTON_HEIGHT,
     )
+
 
 def _build_skin_cluster_section():
     cmds.frameLayout(
@@ -160,6 +164,7 @@ def _build_skin_cluster_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
+
 
 def _build_joints_section():
     cmds.frameLayout(
@@ -218,6 +223,7 @@ def _build_joints_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
+
 
 def _build_operation_section():
     cmds.frameLayout(
@@ -279,6 +285,7 @@ def _build_operation_section():
     cmds.setParent("..")
     cmds.setParent("..")
 
+
 def _build_falloff_section():
     cmds.frameLayout(
         label="Brush / Falloff",
@@ -335,8 +342,10 @@ def _build_falloff_section():
         value=0.0001,
         enable=True,
     )
+
     cmds.setParent("..")
     cmds.setParent("..")
+
 
 def _build_visualization_section():
     cmds.frameLayout(
@@ -356,6 +365,7 @@ def _build_visualization_section():
     cmds.setParent("..")
     cmds.setParent("..")
 
+
 def _build_advanced_section():
     cmds.frameLayout(
         label="Advanced",
@@ -373,6 +383,7 @@ def _build_advanced_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
+
 
 def load_skin_weight(silent=False):
     """
@@ -449,6 +460,7 @@ def load_skin_weight(silent=False):
         if not silent:
             _show_error(exc)
 
+
 def _sync_loaded_skin_context():
     """
     Refresh the window from the mesh already stored in tool state.
@@ -491,18 +503,19 @@ def _sync_loaded_skin_context():
         label="Mode: Object loaded with skinCluster",
     )
 
+
 def refresh_from_selection(silent=False):
     """
     Backward-compatible alias during QC transition.
     """
     load_skin_weight(silent=silent)
 
+
 def add_selected_joints():
     try:
         _require_loaded_mesh()
 
         selected_joints = get_selected_joints()
-
         if not selected_joints:
             cmds.warning("No selected joints found.")
             return
@@ -527,6 +540,7 @@ def add_selected_joints():
 
     except Exception as exc:
         _show_error(exc)
+
 
 def remove_selected_joints():
     try:
@@ -564,6 +578,7 @@ def remove_selected_joints():
     except Exception as exc:
         _show_error(exc)
 
+
 def remove_all_joints():
     try:
         _clear_tool_context()
@@ -571,6 +586,7 @@ def remove_all_joints():
 
     except Exception as exc:
         _show_error(exc)
+
 
 def show_selected_joints_in_list():
     try:
@@ -630,6 +646,7 @@ def show_selected_joints_in_list():
     except Exception as exc:
         _show_error(exc)
 
+
 def _clear_tool_context():
     _STATE["mesh_shape"] = None
     _STATE["mesh_transform"] = None
@@ -665,6 +682,7 @@ def _clear_tool_context():
         edit=True,
         removeAll=True,
     )
+
 
 def apply_operation():
     """
@@ -729,7 +747,7 @@ def apply_operation():
 
         print(
             "\n[AD Skin Tools] "
-            "QC-2.4.1 Opposite-Coherent Ownership Bind"
+            "QC-2.4 Closest Ownership Bind"
         )
 
         print(
@@ -769,11 +787,6 @@ def apply_operation():
         )
 
         print(
-            f"Opposite vertex pairs: "
-            f"{result.opposite_pair_count}"
-        )
-
-        print(
             "Average influences per vertex: "
             f"{result.average_influence_count:.3f}"
         )
@@ -804,6 +817,7 @@ def apply_operation():
     except Exception as exc:
         _show_error(exc)
 
+
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
@@ -828,13 +842,15 @@ def show_help():
         ),
         button=["OK"],
     )
-      
+
+
 def show_environment_report():
     cmds.confirmDialog(
         title="AD Skin Tools Environment",
         message=environment_report(),
         button=["OK"],
     )
+
 
 def _set_option_menu_items(menu_name, items):
     existing_items = cmds.optionMenu(menu_name, query=True, itemListLong=True) or []
@@ -844,6 +860,7 @@ def _set_option_menu_items(menu_name, items):
 
     for item in items:
         cmds.menuItem(label=item, parent=menu_name)
+
 
 def _set_joint_list(joints):
     """
@@ -879,6 +896,7 @@ def _set_joint_list(joints):
             append=display_name,
         )
 
+
 def _update_joint_count_label():
     joints = _STATE.get("joints", [])
 
@@ -888,9 +906,13 @@ def _update_joint_count_label():
         label=f"Joints: {len(joints)}",
     )
 
+
 def _require_loaded_mesh():
     if not _STATE.get("mesh_shape"):
-        raise RuntimeError("No mesh loaded. Select a mesh object and click Load Skin Weight.")
+        raise RuntimeError(
+            "No mesh loaded. Select a mesh object and click Load Skin Weight."
+        )
+
 
 def _joint_exists_in_list(joint: str, joint_list: list[str]) -> bool:
     normalized = _normalize_joint_path(joint)
@@ -901,8 +923,10 @@ def _joint_exists_in_list(joint: str, joint_list: list[str]) -> bool:
 
     return False
 
+
 def _short_name(node: str) -> str:
     return node.split("|")[-1]
+
 
 def _normalize_joint_path(joint: str) -> str:
     matches = cmds.ls(joint, long=True, type="joint") or []
@@ -911,6 +935,7 @@ def _normalize_joint_path(joint: str) -> str:
         return matches[0]
 
     return joint
+
 
 def _unique_joint_paths(joints: list[str]) -> list[str]:
     result = []
@@ -927,6 +952,7 @@ def _unique_joint_paths(joints: list[str]) -> list[str]:
         result.append(normalized)
 
     return result
+
 
 def _make_unique_joint_label(joint: str, all_joints: list[str]) -> str:
     """
@@ -961,21 +987,26 @@ def _make_unique_joint_label(joint: str, all_joints: list[str]) -> str:
 
     return joint
 
+
 def _dag_parts(node: str) -> list[str]:
     return [part for part in node.split("|") if part]
+
 
 def _path_from_display_label(display_label: str):
     return _STATE.get("joint_display_to_path", {}).get(display_label)
 
+
 def _display_label_from_path(joint: str):
     normalized = _normalize_joint_path(joint)
     return _STATE.get("joint_path_to_display", {}).get(normalized)
+
 
 def _percent_row(height=ROW_HEIGHT):
     return cmds.formLayout(
         numberOfDivisions=100,
         height=height,
     )
+
 
 def _attach_percent(layout, control, left, right, top=2, bottom=2):
     cmds.formLayout(
@@ -990,6 +1021,7 @@ def _attach_percent(layout, control, left, right, top=2, bottom=2):
             (control, "right", 0, right),
         ],
     )
+
 
 def _label_control_row(label, control_builder, height=ROW_HEIGHT):
     """
@@ -1026,6 +1058,7 @@ def _label_control_row(label, control_builder, height=ROW_HEIGHT):
 
     cmds.setParent("..")
     return control
+
 
 def _button_row(buttons, height=BUTTON_HEIGHT, gap=BUTTON_GAP):
     """
@@ -1071,6 +1104,7 @@ def _button_row(buttons, height=BUTTON_HEIGHT, gap=BUTTON_GAP):
     cmds.setParent("..")
     return layout
 
+
 def _radio_row(
     group_key,
     label,
@@ -1078,8 +1112,8 @@ def _radio_row(
     selected=1,
     enabled=True,
     option_widths=None,
-    height=ROW_HEIGHT):
-
+    height=ROW_HEIGHT,
+):
     """
     Build a compact, left-aligned radio-button row.
 
@@ -1154,6 +1188,7 @@ def _radio_row(
     cmds.setParent("..")
     return collection
 
+
 def _selected_radio_index(group_key):
     """
     Query each radioButton directly.
@@ -1183,12 +1218,14 @@ def _selected_radio_index(group_key):
 
     return 0
 
+
 def _info(message: str):
     cmds.inViewMessage(
         assistMessage=message,
         position="topCenter",
         fade=True,
     )
+
 
 def _show_error(exc: Exception):
     traceback.print_exc()

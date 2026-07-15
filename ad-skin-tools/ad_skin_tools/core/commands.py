@@ -25,7 +25,6 @@ from ad_skin_tools.core.influence import (
 
 from ad_skin_tools.core.mesh import (
     get_vertex_positions,
-    get_vertex_normals,
     get_world_positions,
     get_vertex_count,
     get_all_vertex_neighbors,
@@ -37,6 +36,7 @@ from ad_skin_tools.core.weights import (
     build_even_target,
     build_closest_target,
 )
+
 
 @dataclass(frozen=True)
 class ClosestObjectBindResult:
@@ -50,10 +50,10 @@ class ClosestObjectBindResult:
     segment_count: int
     point_count: int
     smooth_iterations: int
-    opposite_pair_count: int
 
     average_influence_count: float
     max_influence_count: int
+
 
 def bind_object_closest(
     mesh_shape: str,
@@ -181,11 +181,6 @@ def bind_object_closest(
                 mesh_shape,
                 vertex_ids,
             )
-            
-            vertex_normals = get_vertex_normals(
-                mesh_shape,
-                vertex_ids,
-            )
 
             topology_neighbors = get_all_vertex_neighbors(
                 mesh_shape
@@ -193,7 +188,6 @@ def bind_object_closest(
 
             solver_result = solve_closest_ownership_weights(
                 vertex_positions=vertex_positions,
-                vertex_normals=vertex_normals,
                 joints=influence_names,
                 neighbors=topology_neighbors,
                 smooth_iterations=smooth_iterations,
@@ -203,9 +197,6 @@ def bind_object_closest(
                 endpoint_inset=0.001,
                 distance_chunk_size=8192,
                 smoothing_chunk_size=2048,
-                opposite_normal_dot_threshold=-0.7,
-                opposite_distance_scale=3.0,
-                pair_chunk_size=256,
             )
 
             expected_shape = (
@@ -355,10 +346,6 @@ def bind_object_closest(
                 max_influence_count=(
                     solver_result.max_influence_count
                 ),
-
-                opposite_pair_count=(
-                    solver_result.opposite_pair_count
-                ),
             )
 
     except Exception:
@@ -389,6 +376,7 @@ def bind_object_closest(
         _restore_scene_selection(
             original_selection
         )
+
 
 def flood_even(selected_influences: list[str], strength: float = 1.0) -> None:
     """
@@ -547,25 +535,6 @@ def smooth_selected(iterations: int = 1, strength: float = 1.0) -> None:
 
         final_weights = normalize_rows(final_weights)
 
-        if not np.all(
-            np.isfinite(
-                solver_result.weights
-            )
-        ):
-            invalid_row_count = int(
-                np.count_nonzero(
-                    ~np.isfinite(
-                        solver_result.weights
-                    ).all(axis=1)
-                )
-            )
-
-            raise RuntimeError(
-                "Ownership solver returned non-finite weights "
-                "before writing to Maya.\n\n"
-                f"Invalid rows: {invalid_row_count}"
-            )
-
         adapter.set_weights(
             vertex_ids=selected_ids,
             weights=final_weights,
@@ -580,6 +549,7 @@ def show_done_message(message: str) -> None:
         fade=True,
     )
 
+
 def _restore_scene_selection(items):
     """
     Restore the artist's Maya selection after the bind operation.
@@ -592,7 +562,6 @@ def _restore_scene_selection(items):
                 items,
                 replace=True,
             )
-
     except Exception:
         # A selected scene item may have been deleted or renamed.
         # Selection restoration must not invalidate a successful bind.
