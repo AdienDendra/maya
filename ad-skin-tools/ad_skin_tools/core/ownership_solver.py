@@ -108,6 +108,22 @@ def solve_closest_ownership_weights(
                 "as vertex_positions."
             )
 
+        if not np.all(
+            np.isfinite(vertex_normals)
+        ):
+            invalid_normal_count = int(
+                np.count_nonzero(
+                    ~np.isfinite(
+                        vertex_normals
+                    ).all(axis=1)
+                )
+            )
+
+            raise ValueError(
+                "vertex_normals contains non-finite values.\n\n"
+                f"Invalid normals: {invalid_normal_count}"
+            )
+            
         normal_lengths = np.linalg.norm(
             vertex_normals,
             axis=1,
@@ -243,6 +259,24 @@ def solve_closest_ownership_weights(
             iterations=smooth_iterations,
             chunk_size=smoothing_chunk_size,
         )
+
+        if not np.all(
+            np.isfinite(weights)
+        ):
+            invalid_row_count = int(
+                np.count_nonzero(
+                    ~np.isfinite(
+                        weights
+                    ).all(axis=1)
+                )
+            )
+
+            raise RuntimeError(
+                "Ownership solver produced non-finite weights "
+                "before pruning.\n\n"
+                f"Invalid rows: {invalid_row_count}"
+            )
+        
 
     weights = _limit_prune_and_normalize(
         weights=weights,
@@ -1071,62 +1105,106 @@ def _relax_weights(
     iterations: int,
     chunk_size: int,
 ) -> np.ndarray:
-    vertex_count, influence_count = weights.shape
-    current = np.asarray(weights, dtype=np.float64)
+    """
+    Relax weights through direct topology neighbors.
 
-    for _ in range(iterations):
+    After every complete topology-smoothing pass, reciprocal opposite
+    vertex pairs are assigned their shared average weight.
+    """
+    vertex_count, influence_count = weights.shape
+
+    current = np.asarray(
+        weights,
+        dtype=np.float64,
+    ).copy()
+
+    for iteration_index in range(iterations):
         padded = np.vstack(
             [
                 current,
-                np.zeros((1, influence_count), dtype=np.float64),
+                np.zeros(
+                    (1, influence_count),
+                    dtype=np.float64,
+                ),
             ]
         )
 
-        next_weights = np.empty_like(current)
+        next_weights = np.empty_like(
+            current
+        )
 
-        for start_row in range(0, vertex_count, chunk_size):
-            end_row = min(start_row + chunk_size, vertex_count)
+        # First calculate every vertex row.
+        for start_row in range(
+            0,
+            vertex_count,
+            chunk_size,
+        ):
+            end_row = min(
+                start_row + chunk_size,
+                vertex_count,
+            )
 
             gathered = padded[
-                neighbor_indices[start_row:end_row]
+                neighbor_indices[
+                    start_row:end_row
+                ]
             ]
 
-            next_weights[start_row:end_row] = (
+            next_weights[
+                start_row:end_row
+            ] = (
                 gathered.sum(axis=1)
                 / neighbor_counts[
                     start_row:end_row,
                     np.newaxis,
                 ]
             )
-            
-            if opposite_pairs.size:
-                pair_a = opposite_pairs[
-                    :,
-                    0,
-                ]
 
-                pair_b = opposite_pairs[
-                    :,
-                    1,
-                ]
+        # Only read opposite-pair rows after all rows have been initialized.
+        if opposite_pairs.size:
+            pair_a = opposite_pairs[
+                :,
+                0,
+            ]
 
-                paired_average = (
-                    next_weights[pair_a]
-                    + next_weights[pair_b]
-                ) * 0.5
+            pair_b = opposite_pairs[
+                :,
+                1,
+            ]
 
-                next_weights[
-                    pair_a
-                ] = paired_average
+            paired_average = (
+                next_weights[pair_a]
+                + next_weights[pair_b]
+            ) * 0.5
 
-                next_weights[
-                    pair_b
-                ] = paired_average
+            next_weights[
+                pair_a
+            ] = paired_average
+
+            next_weights[
+                pair_b
+            ] = paired_average
+
+        if not np.all(
+            np.isfinite(next_weights)
+        ):
+            invalid_row_count = int(
+                np.count_nonzero(
+                    ~np.isfinite(
+                        next_weights
+                    ).all(axis=1)
+                )
+            )
+
+            raise RuntimeError(
+                "Ownership relaxation produced non-finite weights.\n\n"
+                f"Iteration: {iteration_index + 1}\n"
+                f"Invalid rows: {invalid_row_count}"
+            )
 
         current = next_weights
 
     return current
-
 
 def _limit_prune_and_normalize(
     weights: np.ndarray,
