@@ -116,8 +116,6 @@ def bind_object_constrained_closest(
 
     try:
         with undo_chunk("AD Skin Constrained Closest Bone Bind"):
-            # Create only the skinCluster container. Every weight row is
-            # replaced below by the constrained solver result.
             adapter = create_closest_skin_cluster(
                 mesh_shape=mesh_shape,
                 mesh_transform=mesh_transform,
