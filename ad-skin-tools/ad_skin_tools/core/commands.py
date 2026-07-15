@@ -25,6 +25,7 @@ from ad_skin_tools.core.influence import (
 
 from ad_skin_tools.core.mesh import (
     get_vertex_positions,
+    get_vertex_normals,
     get_world_positions,
     get_vertex_count,
     get_all_vertex_neighbors,
@@ -49,6 +50,7 @@ class ClosestObjectBindResult:
     segment_count: int
     point_count: int
     smooth_iterations: int
+    opposite_pair_count: int
 
     average_influence_count: float
     max_influence_count: int
@@ -179,6 +181,11 @@ def bind_object_closest(
                 mesh_shape,
                 vertex_ids,
             )
+            
+            vertex_normals = get_vertex_normals(
+                mesh_shape,
+                vertex_ids,
+            )
 
             topology_neighbors = get_all_vertex_neighbors(
                 mesh_shape
@@ -186,6 +193,7 @@ def bind_object_closest(
 
             solver_result = solve_closest_ownership_weights(
                 vertex_positions=vertex_positions,
+                vertex_normals=vertex_normals,
                 joints=influence_names,
                 neighbors=topology_neighbors,
                 smooth_iterations=smooth_iterations,
@@ -195,6 +203,9 @@ def bind_object_closest(
                 endpoint_inset=0.001,
                 distance_chunk_size=8192,
                 smoothing_chunk_size=2048,
+                opposite_normal_dot_threshold=-0.7,
+                opposite_distance_scale=3.0,
+                pair_chunk_size=256,
             )
 
             expected_shape = (
@@ -343,6 +354,10 @@ def bind_object_closest(
                 ),
                 max_influence_count=(
                     solver_result.max_influence_count
+                ),
+                
+                opposite_pair_count=(
+                    solver_result.opposite_pair_count
                 ),
             )
 
