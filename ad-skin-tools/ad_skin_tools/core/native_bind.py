@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import maya.cmds as cmds
 
@@ -46,7 +46,7 @@ class NativeBindResult:
 def create_native_bind(
     mesh_transform: str,
     joints: List[str],
-    options: NativeBindOptions | None = None,
+    options: Optional[NativeBindOptions] = None,
 ) -> NativeBindResult:
     """
     Bind an unskinned mesh using Maya's native binding implementation.
@@ -65,11 +65,11 @@ def create_native_bind(
     method_id = _resolve_bind_method(options.method)
     max_influences = int(options.max_influences)
 
-    if max_influences < 1:
-        raise ValueError("max_influences must be at least 1.")
-
-    if int(options.voxel_resolution) < 1:
-        raise ValueError("voxel_resolution must be at least 1.")
+    _validate_options(
+        options=options,
+        method_id=method_id,
+        max_influences=max_influences,
+    )
 
     normalized_joints = _normalize_joint_paths(joints)
 
@@ -126,20 +126,22 @@ def create_native_bind(
                 options=options,
             )
 
-        influence_count = len(
-            cmds.skinCluster(
-                skin_cluster,
-                query=True,
-                influence=True,
+        influences = cmds.skinCluster(
+            skin_cluster,
+            query=True,
+            influence=True,
+        ) or []
+
+        if len(influences) < 2:
+            raise RuntimeError(
+                "The created skinCluster contains fewer than two influences."
             )
-            or []
-        )
 
         return NativeBindResult(
             skin_cluster=skin_cluster,
             mesh_transform=mesh_transform,
             method=options.method,
-            influence_count=influence_count,
+            influence_count=len(influences),
             max_influences=max_influences,
         )
 
@@ -148,15 +150,69 @@ def create_native_bind(
         raise
 
 
+def _validate_options(
+    options: NativeBindOptions,
+    method_id: int,
+    max_influences: int,
+) -> None:
+    if max_influences < 1:
+        raise ValueError("max_influences must be at least 1.")
+
+    normalize_weights = int(options.normalize_weights)
+
+    if normalize_weights not in (0, 1, 2):
+        raise ValueError(
+            "normalize_weights must be 0 (none), 1 (interactive), "
+            "or 2 (post)."
+        )
+
+    skin_method = int(options.skin_method)
+
+    if skin_method not in (0, 1, 2):
+        raise ValueError(
+            "skin_method must be 0 (linear), 1 (dual quaternion), "
+            "or 2 (weight blended)."
+        )
+
+    dropoff_rate = float(options.dropoff_rate)
+
+    if not 0.1 <= dropoff_rate <= 10.0:
+        raise ValueError(
+            "dropoff_rate must be between 0.1 and 10.0."
+        )
+
+    heatmap_falloff = float(options.heatmap_falloff)
+
+    if not 0.0 <= heatmap_falloff <= 1.0:
+        raise ValueError(
+            "heatmap_falloff must be between 0.0 and 1.0."
+        )
+
+    geodesic_falloff = float(options.geodesic_falloff)
+
+    if not 0.0 <= geodesic_falloff <= 1.0:
+        raise ValueError(
+            "geodesic_falloff must be between 0.0 and 1.0."
+        )
+
+    if method_id == 3:
+        resolution = int(options.voxel_resolution)
+
+        if resolution < 1 or not _is_power_of_two(resolution):
+            raise ValueError(
+                "voxel_resolution must be a positive power of two, "
+                "for example 64, 128, 256, or 512."
+            )
+
+
 def _run_geodesic_voxel_bind(
     skin_cluster: str,
     options: NativeBindOptions,
 ) -> None:
     """
-    Ask Maya to calculate Geodesic Voxel weights for an existing skinCluster.
+    Ask Maya to calculate Geodesic Voxel weights for a skinCluster.
 
-    geomBind is Maya's native geodesic binding command. It requires an
-    interactive Maya session and may be unavailable in batch/headless mode.
+    geomBind uses GPU acceleration and is not supported in Maya batch mode.
     """
     if not hasattr(cmds, "geomBind"):
         raise RuntimeError(
@@ -245,3 +301,7 @@ def _remove_partial_skin_cluster(skin_cluster) -> None:
         cmds.delete(skin_cluster)
     except Exception:
         pass
+
+
+def _is_power_of_two(value: int) -> bool:
+    return value > 0 and (value & (value - 1)) == 0
