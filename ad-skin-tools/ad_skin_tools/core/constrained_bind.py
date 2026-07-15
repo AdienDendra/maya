@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import maya.cmds as cmds
 
@@ -70,7 +70,7 @@ def bind_object_constrained_closest(
     mesh_shape: str,
     mesh_transform: str,
     joints: Sequence[str],
-    options: ConstrainedClosestOptions = None,
+    options: Optional[ConstrainedClosestOptions] = None,
 ) -> ConstrainedClosestResult:
     """
     Build a hard initial bind using constrained closest bone ownership.
@@ -397,7 +397,7 @@ def _assign_owners(
     primitives: _Primitives,
     normal_penalty_strength: float,
     chunk_size: int,
-):
+) -> Tuple[np.ndarray, int]:
     vertex_positions = np.asarray(
         vertex_positions,
         dtype=np.float64,
@@ -461,13 +461,12 @@ def _assign_owners(
                 + segment_t[:, np.newaxis]
                 * segment_vector[np.newaxis, :]
             )
-            distances_squared, scored = _score_candidate(
+            _distance_squared, scored = _score_candidate(
                 points=points,
                 normals=normals,
                 closest_points=closest_points,
                 normal_penalty_strength=normal_penalty_strength,
             )
-            del distances_squared
 
             np.minimum(
                 fallback_scores[:, owner_index],
@@ -568,7 +567,7 @@ def _score_candidate(
     normals: np.ndarray,
     closest_points: np.ndarray,
     normal_penalty_strength: float,
-):
+) -> Tuple[np.ndarray, np.ndarray]:
     to_candidate = closest_points - points
     distances_squared = np.einsum(
         "ij,ij->i",
