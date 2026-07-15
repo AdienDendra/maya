@@ -32,8 +32,9 @@ CTRL_MESH_LABEL = "adSkin_meshLabel"
 CTRL_MODE_LABEL = "adSkin_modeLabel"
 CTRL_JOINT_LABEL = "adSkin_jointCountLabel"
 CTRL_JOINT_LIST = "adSkin_jointList"
-CTRL_MAX_INFLUENCES = "adSkin_maxInfluences"
-CTRL_DROPOFF_RATE = "adSkin_dropoffRate"
+CTRL_ROOT_BACK_FRACTION = "adSkin_rootBackFraction"
+CTRL_TERMINAL_BACK_FRACTION = "adSkin_terminalBackFraction"
+CTRL_NORMAL_PENALTY = "adSkin_normalPenalty"
 
 _STATE = {
     "mesh_shape": None,
@@ -198,6 +199,13 @@ def _build_joints_section():
 
 
 def _build_initial_bind_section():
+    """
+    Build controls for the constrained hard-ownership experiment.
+
+    This stage always writes exactly one influence per vertex.
+    It is intended to validate ownership regions before soft weighting
+    or topology smoothing is introduced.
+    """
     cmds.frameLayout(
         label="Initial Bind",
         collapsable=True,
@@ -205,51 +213,90 @@ def _build_initial_bind_section():
         marginWidth=6,
         marginHeight=6,
     )
+
     cmds.columnLayout(
         adjustableColumn=True,
         rowSpacing=6,
     )
 
     cmds.text(
-        label="Method: Maya Closest Distance",
+        label="Method: Constrained Closest Bone",
         align="left",
         font="boldLabelFont",
     )
 
-    cmds.intSliderGrp(
-        CTRL_MAX_INFLUENCES,
-        label="Max Influences",
-        field=True,
-        minValue=1,
-        maxValue=8,
-        fieldMinValue=1,
-        fieldMaxValue=32,
-        value=5,
+    cmds.text(
+        label=(
+            "Diagnostic hard ownership: one influence per vertex, "
+            "with no smoothing or soft weighting."
+        ),
+        align="left",
+        wordWrap=True,
     )
 
     cmds.floatSliderGrp(
-        CTRL_DROPOFF_RATE,
-        label="Dropoff Rate",
+        CTRL_ROOT_BACK_FRACTION,
+        label="Root Back Limit",
         field=True,
-        minValue=0.1,
+        minValue=0.0,
+        maxValue=0.5,
+        fieldMinValue=0.0,
+        fieldMaxValue=2.0,
+        precision=3,
+        value=0.05,
+        annotation=(
+            "How far behind a non-terminal joint root a vertex may be, "
+            "expressed as a fraction of the bone length."
+        ),
+    )
+
+    cmds.floatSliderGrp(
+        CTRL_TERMINAL_BACK_FRACTION,
+        label="Terminal Back Limit",
+        field=True,
+        minValue=0.0,
+        maxValue=1.0,
+        fieldMinValue=0.0,
+        fieldMaxValue=4.0,
+        precision=3,
+        value=0.35,
+        annotation=(
+            "How far behind a terminal joint a vertex may be, "
+            "expressed as a fraction of its parent-bone length."
+        ),
+    )
+
+    cmds.floatSliderGrp(
+        CTRL_NORMAL_PENALTY,
+        label="Normal Penalty",
+        field=True,
+        minValue=0.0,
         maxValue=10.0,
-        fieldMinValue=0.1,
-        fieldMaxValue=10.0,
-        precision=2,
-        value=4.0,
+        fieldMinValue=0.0,
+        fieldMaxValue=100.0,
+        precision=3,
+        value=2.0,
+        annotation=(
+            "Penalizes candidate bones that lie in the outward-facing "
+            "hemisphere of the vertex normal."
+        ),
     )
 
     _button_row(
         [
-            ("Bind Closest Distance", lambda *_: apply_operation()),
+            (
+                "Bind Constrained Closest",
+                lambda *_: apply_operation(),
+            ),
         ],
         height=36,
     )
 
     cmds.text(
         label=(
-            "The tool validates the stored weight data after Maya binds. "
-            "Validation does not guarantee production-ready deformation."
+            "The result is intentionally rigid. First evaluate whether "
+            "the palm, knuckles, fingers, wrist, and fingertips belong "
+            "to the correct joints."
         ),
         align="left",
         wordWrap=True,
@@ -257,7 +304,6 @@ def _build_initial_bind_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
-
 
 def load_skin_weight(silent=False):
     """Load the selected mesh and its current skin context."""
@@ -511,89 +557,170 @@ def show_selected_joints_in_list():
 
 
 def apply_operation():
-    """Run the v2.5 Maya Closest Distance initial bind."""
+    """
+    Run the constrained closest-bone hard-ownership bind.
+
+    The solver writes exactly one weight of 1.0 per vertex. This allows
+    ownership errors to be evaluated before smoothing or soft weighting
+    can hide or spread them.
+    """
     try:
         _require_unskinned_mesh()
 
-        joints = list(_STATE.get("joints", []))
+        joints = list(
+            _STATE.get(
+                "joints",
+                [],
+            )
+        )
 
         if len(joints) < 2:
             raise RuntimeError(
-                "Closest Distance bind requires at least two joints.\n\n"
+                "Constrained Closest bind requires at least two joints.\n\n"
                 "Select joints in Maya and click Add Selected."
             )
 
-        max_influences = cmds.intSliderGrp(
-            CTRL_MAX_INFLUENCES,
-            query=True,
-            value=True,
-        )
-        dropoff_rate = cmds.floatSliderGrp(
-            CTRL_DROPOFF_RATE,
+        root_back_fraction = cmds.floatSliderGrp(
+            CTRL_ROOT_BACK_FRACTION,
             query=True,
             value=True,
         )
 
-        result = commands.bind_object_closest_distance(
+        terminal_back_fraction = cmds.floatSliderGrp(
+            CTRL_TERMINAL_BACK_FRACTION,
+            query=True,
+            value=True,
+        )
+
+        normal_penalty_strength = cmds.floatSliderGrp(
+            CTRL_NORMAL_PENALTY,
+            query=True,
+            value=True,
+        )
+
+        result = commands.bind_object_constrained_closest(
             mesh_shape=_STATE["mesh_shape"],
             mesh_transform=_STATE["mesh_transform"],
             joints=joints,
-            max_influences=max_influences,
-            dropoff_rate=dropoff_rate,
+            root_back_fraction=root_back_fraction,
+            terminal_back_fraction=terminal_back_fraction,
+            normal_penalty_strength=normal_penalty_strength,
         )
 
         _sync_loaded_skin_context()
 
-        print("\n[AD Skin Tool v2.5 Closest Distance]")
-        print(f"Skin Cluster: {result.skin_cluster}")
-        print(f"Mesh: {result.mesh_transform}")
-        print(f"Method: {result.method}")
-        print(f"Vertices: {result.vertex_count}")
-        print(f"Influences: {result.influence_count}")
         print(
-            "Average influences per vertex: "
-            f"{result.average_influence_count:.3f}"
+            "\n"
+            "[AD Skin Tool v2.5 Constrained Closest Bone]"
         )
+
         print(
-            "Maximum influences used: "
-            f"{result.maximum_influence_count_used}"
+            f"Skin Cluster: {result.skin_cluster}"
         )
-        print("Dominant influence assignments:")
+
+        print(
+            f"Mesh: {result.mesh_transform}"
+        )
+
+        print(
+            f"Vertices: {result.vertex_count}"
+        )
+
+        print(
+            f"Influences: {result.influence_count}"
+        )
+
+        print(
+            f"Segment primitives: {result.segment_count}"
+        )
+
+        print(
+            f"Point primitives: {result.point_count}"
+        )
+
+        print(
+            "Fallback vertices: "
+            f"{result.fallback_vertex_count}"
+        )
+
+        print(
+            "Root back fraction: "
+            f"{root_back_fraction:.3f}"
+        )
+
+        print(
+            "Terminal back fraction: "
+            f"{terminal_back_fraction:.3f}"
+        )
+
+        print(
+            "Normal penalty strength: "
+            f"{normal_penalty_strength:.3f}"
+        )
+
+        print(
+            "Hard ownership assignments:"
+        )
 
         for influence, count in (
-            result.dominant_assignment_counts.items()
+            result.assignment_counts.items()
         ):
-            print(f"  {influence}: {count}")
+            print(
+                f"  {influence}: {count}"
+            )
+
+        if result.fallback_vertex_count:
+            cmds.warning(
+                "Constrained bind completed, but "
+                f"{result.fallback_vertex_count} vertices had no valid "
+                "constrained candidate and used the distance fallback."
+            )
 
         _info(
-            "Closest Distance bind complete. Stored weight data "
-            "validation passed."
+            "Constrained Closest bind complete: "
+            f"{result.vertex_count} vertices, exactly one influence "
+            "per vertex."
         )
 
     except Exception as exc:
         _show_error(exc)
 
-
 def show_help():
     cmds.confirmDialog(
         title="AD Skin Weights Tool v2.5",
         message=(
-            "Initial Bind Workflow:\n\n"
+            "Constrained Closest Bone Workflow:\n\n"
             "1. Select an unskinned mesh.\n"
             "2. Click Load Mesh / Skin.\n"
             "3. Select the bind joints in Maya.\n"
             "4. Click Add Selected.\n"
-            "5. Set Max Influences and Dropoff Rate.\n"
-            "6. Click Bind Closest Distance.\n\n"
-            "v2.5 intentionally uses Maya Closest Distance only.\n"
-            "No Heat Map, Closest Hierarchy, Geodesic Voxel, or custom "
-            "object-wide ownership solver is exposed.\n\n"
-            "The validation step checks weight data integrity, not final "
-            "deformation quality."
+            "5. Use the default constraint values first.\n"
+            "6. Click Bind Constrained Closest.\n\n"
+
+            "Current diagnostic stage:\n"
+            "- Exactly one influence per vertex.\n"
+            "- Uses distance to parent-owned joint segments.\n"
+            "- Rejects vertices too far behind a joint root.\n"
+            "- Uses vertex normals as a soft outward penalty.\n"
+            "- Uses special backward limits for terminal joints.\n"
+            "- Does not perform smoothing.\n"
+            "- Does not create soft weights.\n\n"
+
+            "Root Back Limit:\n"
+            "Controls how far behind a bone root that bone may own.\n\n"
+
+            "Terminal Back Limit:\n"
+            "Controls how far backward terminal joints may own vertices.\n\n"
+
+            "Normal Penalty:\n"
+            "Discourages ownership by bones located outside the "
+            "outward-facing side of a vertex.\n\n"
+
+            "First evaluate ownership regions only. Do not evaluate final "
+            "deformation quality yet."
         ),
         button=["OK"],
     )
-
 
 def show_environment_report():
     cmds.confirmDialog(
