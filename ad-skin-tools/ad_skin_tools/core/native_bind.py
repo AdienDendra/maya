@@ -11,11 +11,10 @@ _BIND_METHOD_ID = 0
 @dataclass(frozen=True)
 class NativeBindOptions:
     """
-    Configuration for the v2.5 initial object bind.
+    Internal configuration for the v2.5 initial object bind.
 
-    The bind method is intentionally not configurable. AD Skin Tool v2.5
-    always uses Maya Closest Distance for the initial bind. The remaining
-    values control the standard skinCluster behaviour only.
+    The bind method is intentionally fixed. AD Skin Tool v2.5 always uses
+    Maya Closest Distance. No bind-method selector is exposed to the user.
     """
 
     max_influences: int = 5
@@ -42,9 +41,9 @@ def create_native_bind(
     """
     Bind an unskinned mesh with Maya Closest Distance.
 
-    Maya creates the initial weights using skinCluster(bindMethod=0).
-    AD Skin Tool does not replace those weights with a custom ownership
-    solver. Selected-vertex correction tools remain a separate workflow.
+    Maya creates the initial weights through skinCluster(bindMethod=0).
+    AD Skin Tool does not overwrite those weights with an object-wide custom
+    ownership solver. Selected-vertex correction remains a separate workflow.
     """
     options = options or NativeBindOptions()
 
