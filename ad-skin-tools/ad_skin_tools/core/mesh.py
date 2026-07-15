@@ -39,7 +39,58 @@ def get_vertex_positions(mesh_shape: str, vertex_ids: np.ndarray) -> np.ndarray:
 
     return positions
 
+def get_vertex_normals(
+    mesh_shape: str,
+    vertex_ids: np.ndarray,
+) -> np.ndarray:
+    """
+    Return angle-weighted world-space vertex normals.
 
+    The returned row order follows vertex_ids.
+    """
+    dag_path = get_dag_path(
+        mesh_shape
+    )
+
+    mesh_fn = om.MFnMesh(
+        dag_path
+    )
+
+    normals = mesh_fn.getVertexNormals(
+        True,
+        om.MSpace.kWorld,
+    )
+
+    result = np.zeros(
+        (len(vertex_ids), 3),
+        dtype=np.float64,
+    )
+
+    for row, vertex_id in enumerate(
+        vertex_ids
+    ):
+        normal = normals[
+            int(vertex_id)
+        ]
+
+        result[row] = [
+            normal.x,
+            normal.y,
+            normal.z,
+        ]
+
+    lengths = np.linalg.norm(
+        result,
+        axis=1,
+        keepdims=True,
+    )
+
+    valid = lengths[:, 0] > 1e-12
+
+    result[valid] /= lengths[valid]
+
+    return result
+    
 def get_all_vertex_neighbors(mesh_shape: str) -> List[List[int]]:
     """
     Return connected vertices for every vertex in the mesh.
