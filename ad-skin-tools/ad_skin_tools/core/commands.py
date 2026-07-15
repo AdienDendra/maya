@@ -1,6 +1,11 @@
 import maya.cmds as cmds
 
 from ad_skin_tools.core.compat import ensure_numpy
+from ad_skin_tools.core.constrained_bind import (
+    ConstrainedClosestOptions,
+    ConstrainedClosestResult,
+    bind_object_constrained_closest as _bind_object_constrained_closest,
+)
 from ad_skin_tools.core.influence import (
     resolve_influence_indices,
     resolve_influence_names,
@@ -29,6 +34,37 @@ from ad_skin_tools.core.weights import (
 np = ensure_numpy()
 
 
+def bind_object_constrained_closest(
+    mesh_shape: str,
+    mesh_transform: str,
+    joints: list[str],
+    root_back_fraction: float = 0.05,
+    terminal_back_fraction: float = 0.35,
+    normal_penalty_strength: float = 2.0,
+) -> ConstrainedClosestResult:
+    """
+    Run the v2.5 constrained hard-ownership experiment.
+
+    Every vertex receives exactly one owner. The solver uses parent-owned
+    joint segments, a root half-space constraint, and a one-sided vertex
+    normal penalty. No smoothing or soft weighting is applied yet.
+    """
+    options = ConstrainedClosestOptions(
+        root_back_fraction=float(root_back_fraction),
+        terminal_back_fraction=float(terminal_back_fraction),
+        normal_penalty_strength=float(normal_penalty_strength),
+        endpoint_inset=0.001,
+        chunk_size=4096,
+    )
+
+    return _bind_object_constrained_closest(
+        mesh_shape=mesh_shape,
+        mesh_transform=mesh_transform,
+        joints=joints,
+        options=options,
+    )
+
+
 def bind_object_closest_distance(
     mesh_shape: str,
     mesh_transform: str,
@@ -39,9 +75,9 @@ def bind_object_closest_distance(
     """
     Create an initial bind using Maya Closest Distance only.
 
-    Version 2.5 intentionally exposes no alternative bind method. Maya owns
-    the initial weight calculation through skinCluster(bindMethod=0), while
-    AD Skin Tool reads the result back and validates the stored data.
+    Retained as a baseline comparison while the constrained hard-ownership
+    solver is evaluated. Maya owns this weight calculation through
+    skinCluster(bindMethod=0).
     """
     options = NativeBindOptions(
         max_influences=int(max_influences),
@@ -111,7 +147,7 @@ def flood_closest(
     Give each selected vertex to its closest selected influence pivot.
 
     This selected-vertex editing operation remains separate from the initial
-    Maya Closest Distance bind and will be refined independently.
+    constrained bind and will be refined independently.
     """
     with undo_chunk("AD Skin Flood Closest"):
         component_selection = get_component_selection()
