@@ -729,7 +729,7 @@ def apply_operation():
 
         print(
             "\n[AD Skin Tools] "
-            "QC-2.4 Closest Ownership Bind"
+            "QC-2.4.1 Opposite-Coherent Ownership Bind"
         )
 
         print(
@@ -766,6 +766,11 @@ def apply_operation():
         print(
             f"Smooth iterations: "
             f"{result.smooth_iterations}"
+        )
+
+        print(
+            f"Opposite vertex pairs: "
+            f"{result.opposite_pair_count}"
         )
 
         print(
