@@ -11,7 +11,6 @@ from ad_skin_tools.core.mesh import (
     get_world_positions,
 )
 from ad_skin_tools.core.skin_cluster import (
-    SkinClusterAdapter,
     create_closest_skin_cluster,
     find_skin_cluster,
 )
