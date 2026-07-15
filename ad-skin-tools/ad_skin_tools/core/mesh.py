@@ -54,8 +54,8 @@ def get_vertex_normals(
     Return averaged world-space normals for the requested vertices.
 
     MFnMesh performs the face-normal averaging once in C++; Python only
-    copies the requested rows into a NumPy matrix. This avoids per-vertex
-    cmds.polyNormalPerVertex calls.
+    copies the requested rows into a NumPy matrix. The constrained bind uses
+    these normals as a soft candidate penalty, never as a hard rejection.
     """
     dag_path = get_dag_path(mesh_shape)
     mesh_fn = om.MFnMesh(dag_path)
