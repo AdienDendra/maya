@@ -1,23 +1,18 @@
+import builtins
 import traceback
 
 import maya.cmds as cmds
 
-from ad_skin_tools.core import commands
+from ad_skin_tools.core import automatic_surface_commands
 from ad_skin_tools.core.compat import environment_report
-from ad_skin_tools.core.selection import (
-    get_selected_joints,
-    get_selected_mesh_object,
-)
-from ad_skin_tools.core.skin_cluster import (
-    SkinClusterAdapter,
-    SkinClusterError,
-)
+from ad_skin_tools.core.selection import get_selected_joints, get_selected_mesh_object
+from ad_skin_tools.core.skin_cluster import SkinClusterAdapter, SkinClusterError
 
 
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
-WINDOW_LABEL = "AD Skin Weights Tool v2.5"
-WINDOW_WIDTH = 320
-WINDOW_HEIGHT = 620
+WINDOW_LABEL = "AD Skin Weights Tool v2.7"
+WINDOW_WIDTH = 340
+WINDOW_HEIGHT = 610
 
 BUTTON_HEIGHT = 28
 ROW_HEIGHT = 26
@@ -32,9 +27,9 @@ CTRL_MESH_LABEL = "adSkin_meshLabel"
 CTRL_MODE_LABEL = "adSkin_modeLabel"
 CTRL_JOINT_LABEL = "adSkin_jointCountLabel"
 CTRL_JOINT_LIST = "adSkin_jointList"
-CTRL_ROOT_BACK_FRACTION = "adSkin_rootBackFraction"
-CTRL_TERMINAL_BACK_FRACTION = "adSkin_terminalBackFraction"
-CTRL_NORMAL_PENALTY = "adSkin_normalPenalty"
+CTRL_BIND_BUTTON = "adSkin_bindAutomaticSurfaceButton"
+CTRL_BIND_PROGRESS = "adSkin_bindAutomaticSurfaceProgress"
+CTRL_BIND_STATUS = "adSkin_bindAutomaticSurfaceStatus"
 
 _STATE = {
     "mesh_shape": None,
@@ -44,6 +39,7 @@ _STATE = {
     "joints": [],
     "joint_display_to_path": {},
     "joint_path_to_display": {},
+    "busy": False,
 }
 
 
@@ -58,7 +54,6 @@ def show(auto_refresh=False):
         initialWidth=WINDOW_WIDTH,
         initialHeight=WINDOW_HEIGHT,
     )
-
     cmds.setParent(WINDOW_NAME)
 
     cmds.scrollLayout(
@@ -67,7 +62,6 @@ def show(auto_refresh=False):
         verticalScrollBarThickness=16,
         horizontalScrollBarThickness=0,
     )
-
     cmds.columnLayout(
         CTRL_MAIN_COLUMN,
         adjustableColumn=True,
@@ -93,10 +87,7 @@ def _delete_existing_workspace():
 
     try:
         if cmds.workspaceControlState(WINDOW_NAME, exists=True):
-            cmds.workspaceControlState(
-                WINDOW_NAME,
-                remove=True,
-            )
+            cmds.workspaceControlState(WINDOW_NAME, remove=True)
     except Exception:
         pass
 
@@ -106,8 +97,7 @@ def _build_header():
         [
             ("Tool Help", lambda *_: show_help()),
             ("Environment", lambda *_: show_environment_report()),
-        ],
-        height=BUTTON_HEIGHT,
+        ]
     )
 
 
@@ -119,36 +109,22 @@ def _build_skin_cluster_section():
         marginWidth=6,
         marginHeight=6,
     )
-    cmds.columnLayout(
-        adjustableColumn=True,
-        rowSpacing=5,
-    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
 
     _label_control_row(
         "Skin Cluster",
         lambda: cmds.optionMenu(CTRL_SKIN_MENU),
     )
-
-    cmds.text(
-        CTRL_MESH_LABEL,
-        label="Mesh: <none>",
-        align="left",
-    )
+    cmds.text(CTRL_MESH_LABEL, label="Mesh: <none>", align="left")
     cmds.text(
         CTRL_MODE_LABEL,
         label="Mode: No object loaded",
         align="left",
     )
-    cmds.text(
-        CTRL_JOINT_LABEL,
-        label="Joints: 0",
-        align="left",
-    )
+    cmds.text(CTRL_JOINT_LABEL, label="Joints: 0", align="left")
 
     _button_row(
-        [
-            ("Load Mesh / Skin", lambda *_: load_skin_weight()),
-        ],
+        [("Load Mesh / Skin", lambda *_: load_skin_weight())],
         height=30,
     )
 
@@ -164,17 +140,13 @@ def _build_joints_section():
         marginWidth=6,
         marginHeight=6,
     )
-    cmds.columnLayout(
-        adjustableColumn=True,
-        rowSpacing=5,
-    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
 
     cmds.textScrollList(
         CTRL_JOINT_LIST,
         allowMultiSelection=True,
         height=220,
     )
-
     _button_row(
         [
             ("Add Selected", lambda *_: add_selected_joints()),
@@ -183,13 +155,12 @@ def _build_joints_section():
         ],
         height=30,
     )
-
     _button_row(
         [
             (
                 "Show Maya Selection In List",
                 lambda *_: show_selected_joints_in_list(),
-            ),
+            )
         ],
         height=30,
     )
@@ -199,13 +170,6 @@ def _build_joints_section():
 
 
 def _build_initial_bind_section():
-    """
-    Build controls for the constrained hard-ownership experiment.
-
-    This stage always writes exactly one influence per vertex.
-    It is intended to validate ownership regions before soft weighting
-    or topology smoothing is introduced.
-    """
     cmds.frameLayout(
         label="Initial Bind",
         collapsable=True,
@@ -213,90 +177,45 @@ def _build_initial_bind_section():
         marginWidth=6,
         marginHeight=6,
     )
-
-    cmds.columnLayout(
-        adjustableColumn=True,
-        rowSpacing=6,
-    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
 
     cmds.text(
-        label="Method: Constrained Closest Bone",
+        label="Automatic Surface",
         align="left",
         font="boldLabelFont",
     )
-
     cmds.text(
         label=(
-            "Diagnostic hard ownership: one influence per vertex, "
-            "with no smoothing or soft weighting."
+            "Automatically calculates seeds and floods hard ownership across "
+            "all connected and disconnected surface components."
         ),
         align="left",
         wordWrap=True,
     )
-
-    cmds.floatSliderGrp(
-        CTRL_ROOT_BACK_FRACTION,
-        label="Root Back Limit",
-        field=True,
-        minValue=0.0,
-        maxValue=0.5,
-        fieldMinValue=0.0,
-        fieldMaxValue=2.0,
-        precision=3,
-        value=0.05,
+    cmds.button(
+        CTRL_BIND_BUTTON,
+        label="Bind Automatic Surface",
+        height=38,
+        command=lambda *_: apply_operation(),
         annotation=(
-            "How far behind a non-terminal joint root a vertex may be, "
-            "expressed as a fraction of the bone length."
+            "Bind the loaded unskinned mesh using all joints in the influence "
+            "list. No fallback joint or shell assignment is required."
         ),
     )
 
-    cmds.floatSliderGrp(
-        CTRL_TERMINAL_BACK_FRACTION,
-        label="Terminal Back Limit",
-        field=True,
-        minValue=0.0,
-        maxValue=1.0,
-        fieldMinValue=0.0,
-        fieldMaxValue=4.0,
-        precision=3,
-        value=0.35,
-        annotation=(
-            "How far behind a terminal joint a vertex may be, "
-            "expressed as a fraction of its parent-bone length."
-        ),
-    )
-
-    cmds.floatSliderGrp(
-        CTRL_NORMAL_PENALTY,
-        label="Normal Penalty",
-        field=True,
-        minValue=0.0,
-        maxValue=10.0,
-        fieldMinValue=0.0,
-        fieldMaxValue=100.0,
-        precision=3,
-        value=2.0,
-        annotation=(
-            "Penalizes candidate bones that lie in the outward-facing "
-            "hemisphere of the vertex normal."
-        ),
-    )
-
-    _button_row(
-        [
-            (
-                "Bind Constrained Closest",
-                lambda *_: apply_operation(),
-            ),
-        ],
-        height=36,
-    )
+    _create_bind_progress_bar()
 
     cmds.text(
+        CTRL_BIND_STATUS,
+        label="",
+        align="left",
+        wordWrap=True,
+        visible=False,
+    )
+    cmds.text(
         label=(
-            "The result is intentionally rigid. First evaluate whether "
-            "the palm, knuckles, fingers, wrist, and fingertips belong "
-            "to the correct joints."
+            "v2.7 writes one influence at weight 1.0 per vertex. Smoothing "
+            "and soft transitions will be introduced in v2.8."
         ),
         align="left",
         wordWrap=True,
@@ -304,10 +223,31 @@ def _build_initial_bind_section():
 
     cmds.setParent("..")
     cmds.setParent("..")
+
+
+def _create_bind_progress_bar():
+    try:
+        cmds.progressBar(
+            CTRL_BIND_PROGRESS,
+            maxValue=100,
+            progress=0,
+            isIndeterminate=True,
+            visible=False,
+            height=12,
+        )
+    except TypeError:
+        cmds.progressBar(
+            CTRL_BIND_PROGRESS,
+            maxValue=100,
+            progress=50,
+            visible=False,
+            height=12,
+        )
+
 
 def load_skin_weight(silent=False):
-    """Load the selected mesh and its current skin context."""
     try:
+        _require_not_busy()
         mesh_selection = get_selected_mesh_object()
         mesh_shape = mesh_selection.mesh_shape
         mesh_transform = mesh_selection.mesh_transform
@@ -322,28 +262,24 @@ def load_skin_weight(silent=False):
             joints = []
             has_skin = False
 
-        _STATE["mesh_shape"] = mesh_shape
-        _STATE["mesh_transform"] = mesh_transform
-        _STATE["skin_cluster"] = skin_cluster
-        _STATE["has_skin_cluster"] = has_skin
-        _STATE["joints"] = list(joints)
-
-        skin_label = (
-            skin_cluster
-            if skin_cluster
-            else "<no skinCluster>"
+        _STATE.update(
+            {
+                "mesh_shape": mesh_shape,
+                "mesh_transform": mesh_transform,
+                "skin_cluster": skin_cluster,
+                "has_skin_cluster": has_skin,
+                "joints": builtins.list(joints),
+            }
         )
 
-        _set_option_menu_items(
-            CTRL_SKIN_MENU,
-            [skin_label],
-        )
+        skin_label = skin_cluster if skin_cluster else "<no skinCluster>"
+        _set_option_menu_items(CTRL_SKIN_MENU, [skin_label])
         _set_joint_list(_STATE["joints"])
 
         cmds.text(
             CTRL_MESH_LABEL,
             edit=True,
-            label=f"Mesh: {mesh_transform}",
+            label="Mesh: {}".format(mesh_transform),
         )
         cmds.text(
             CTRL_MODE_LABEL,
@@ -360,7 +296,6 @@ def load_skin_weight(silent=False):
             _info("Loaded the selected mesh and existing skinCluster.")
         else:
             _info("Loaded an unskinned mesh. Add joints to bind.")
-
     except Exception as exc:
         if not silent:
             _show_error(exc)
@@ -380,21 +315,22 @@ def _sync_loaded_skin_context():
     adapter = SkinClusterAdapter.from_mesh(mesh_shape)
     joints = adapter.influences()
 
-    _STATE["skin_cluster"] = adapter.skin_cluster
-    _STATE["has_skin_cluster"] = True
-    _STATE["joints"] = list(joints)
-
-    _set_option_menu_items(
-        CTRL_SKIN_MENU,
-        [adapter.skin_cluster],
+    _STATE.update(
+        {
+            "skin_cluster": adapter.skin_cluster,
+            "has_skin_cluster": True,
+            "joints": builtins.list(joints),
+        }
     )
+
+    _set_option_menu_items(CTRL_SKIN_MENU, [adapter.skin_cluster])
     _set_joint_list(joints)
     _update_joint_count_label()
 
     cmds.text(
         CTRL_MESH_LABEL,
         edit=True,
-        label=f"Mesh: {mesh_transform}",
+        label="Mesh: {}".format(mesh_transform),
     )
     cmds.text(
         CTRL_MODE_LABEL,
@@ -405,6 +341,7 @@ def _sync_loaded_skin_context():
 
 def add_selected_joints():
     try:
+        _require_not_busy()
         _require_loaded_mesh()
 
         if _STATE.get("has_skin_cluster"):
@@ -414,21 +351,16 @@ def add_selected_joints():
             )
 
         selected_joints = get_selected_joints()
-
         if not selected_joints:
             cmds.warning("No selected joints found.")
             return
 
-        current_joints = list(_STATE.get("joints", []))
+        current_joints = builtins.list(_STATE.get("joints", []))
         added = []
 
         for joint in selected_joints:
             normalized = _normalize_joint_path(joint)
-
-            if not _joint_exists_in_list(
-                normalized,
-                current_joints,
-            ):
+            if not _joint_exists_in_list(normalized, current_joints):
                 current_joints.append(normalized)
                 added.append(normalized)
 
@@ -436,56 +368,56 @@ def add_selected_joints():
         _update_joint_count_label()
 
         if added:
-            _info(f"Added {len(added)} joint(s).")
+            _info("Added {} joint(s).".format(builtins.len(added)))
         else:
             cmds.warning("Selected joints already exist in the list.")
-
     except Exception as exc:
         _show_error(exc)
 
 
 def remove_selected_joints():
     try:
+        _require_not_busy()
         _require_unskinned_mesh()
 
-        selected_labels = cmds.textScrollList(
+        labels = cmds.textScrollList(
             CTRL_JOINT_LIST,
             query=True,
             selectItem=True,
         ) or []
-
-        if not selected_labels:
+        if not labels:
             cmds.warning("No joints selected in the list.")
             return
 
         selected_paths = {
-            _path_from_display_label(label)
-            for label in selected_labels
-        }
-        selected_paths = {
             path
-            for path in selected_paths
+            for path in (
+                _path_from_display_label(label)
+                for label in labels
+            )
             if path
         }
-
-        current_joints = list(_STATE.get("joints", []))
+        current_joints = builtins.list(_STATE.get("joints", []))
         remaining = [
             joint
             for joint in current_joints
             if joint not in selected_paths
         ]
 
-        removed_count = len(current_joints) - len(remaining)
+        removed_count = (
+            builtins.len(current_joints)
+            - builtins.len(remaining)
+        )
         _set_joint_list(remaining)
         _update_joint_count_label()
-        _info(f"Removed {removed_count} joint(s).")
-
+        _info("Removed {} joint(s).".format(removed_count))
     except Exception as exc:
         _show_error(exc)
 
 
 def remove_all_joints():
     try:
+        _require_not_busy()
         _require_unskinned_mesh()
         _set_joint_list([])
         _update_joint_count_label()
@@ -496,9 +428,10 @@ def remove_all_joints():
 
 def show_selected_joints_in_list():
     try:
+        _require_not_busy()
         _require_loaded_mesh()
-        selected_joints = get_selected_joints()
 
+        selected_joints = get_selected_joints()
         if not selected_joints:
             cmds.warning("No selected joints found in Maya.")
             return
@@ -508,21 +441,20 @@ def show_selected_joints_in_list():
             edit=True,
             deselectAll=True,
         )
-
         all_items = cmds.textScrollList(
             CTRL_JOINT_LIST,
             query=True,
             allItems=True,
         ) or []
 
-        matched_labels = []
-
-        for joint in selected_joints:
-            label = _display_label_from_path(joint)
-
-            if label:
-                matched_labels.append(label)
-
+        matched_labels = [
+            label
+            for label in (
+                _display_label_from_path(joint)
+                for joint in selected_joints
+            )
+            if label
+        ]
         if not matched_labels:
             cmds.warning(
                 "Selected joints were not found in the tool list."
@@ -530,14 +462,12 @@ def show_selected_joints_in_list():
             return
 
         first_index = None
-
         for label in matched_labels:
             cmds.textScrollList(
                 CTRL_JOINT_LIST,
                 edit=True,
                 selectItem=label,
             )
-
             if label in all_items and first_index is None:
                 first_index = all_items.index(label) + 1
 
@@ -549,178 +479,138 @@ def show_selected_joints_in_list():
             )
 
         _info(
-            f"Found {len(matched_labels)} selected joint(s) in the list."
+            "Found {} selected joint(s) in the list.".format(
+                builtins.len(matched_labels)
+            )
         )
-
     except Exception as exc:
         _show_error(exc)
 
 
 def apply_operation():
     """
-    Run the constrained closest-bone hard-ownership bind.
+    Run v2.7 on Maya's main thread while presenting an explicit busy state.
 
-    The solver writes exactly one weight of 1.0 per vertex. This allows
-    ownership errors to be evaluated before smoothing or soft weighting
-    can hide or spread them.
+    Maya geometry and skin APIs are not moved into a worker thread. The UI is
+    repainted before the synchronous solver begins so a long solve does not
+    look like an ignored button click.
     """
+    wait_cursor_active = False
+
     try:
+        _require_not_busy()
         _require_unskinned_mesh()
 
-        joints = list(
-            _STATE.get(
-                "joints",
-                [],
-            )
-        )
-
-        if len(joints) < 2:
+        joints = builtins.list(_STATE.get("joints", []))
+        if builtins.len(joints) < 2:
             raise RuntimeError(
-                "Constrained Closest bind requires at least two joints.\n\n"
+                "Automatic Surface bind requires at least two joints.\n\n"
                 "Select joints in Maya and click Add Selected."
             )
 
-        root_back_fraction = cmds.floatSliderGrp(
-            CTRL_ROOT_BACK_FRACTION,
-            query=True,
-            value=True,
+        _set_bind_busy(
+            True,
+            "Calculating seeds and flooding surface ownership...",
         )
+        cmds.waitCursor(state=True)
+        wait_cursor_active = True
+        cmds.refresh(force=True)
 
-        terminal_back_fraction = cmds.floatSliderGrp(
-            CTRL_TERMINAL_BACK_FRACTION,
-            query=True,
-            value=True,
-        )
-
-        normal_penalty_strength = cmds.floatSliderGrp(
-            CTRL_NORMAL_PENALTY,
-            query=True,
-            value=True,
-        )
-
-        result = commands.bind_object_constrained_closest(
-            mesh_shape=_STATE["mesh_shape"],
-            mesh_transform=_STATE["mesh_transform"],
+        result = automatic_surface_commands.bind_object_automatic_surface(
+            mesh=_STATE["mesh_transform"],
             joints=joints,
-            root_back_fraction=root_back_fraction,
-            terminal_back_fraction=terminal_back_fraction,
-            normal_penalty_strength=normal_penalty_strength,
         )
 
         _sync_loaded_skin_context()
-
-        print(
-            "\n"
-            "[AD Skin Tool v2.5 Constrained Closest Bone]"
-        )
-
-        print(
-            f"Skin Cluster: {result.skin_cluster}"
-        )
-
-        print(
-            f"Mesh: {result.mesh_transform}"
-        )
-
-        print(
-            f"Vertices: {result.vertex_count}"
-        )
-
-        print(
-            f"Influences: {result.influence_count}"
-        )
-
-        print(
-            f"Segment primitives: {result.segment_count}"
-        )
-
-        print(
-            f"Point primitives: {result.point_count}"
-        )
-
-        print(
-            "Fallback vertices: "
-            f"{result.fallback_vertex_count}"
-        )
-
-        print(
-            "Root back fraction: "
-            f"{root_back_fraction:.3f}"
-        )
-
-        print(
-            "Terminal back fraction: "
-            f"{terminal_back_fraction:.3f}"
-        )
-
-        print(
-            "Normal penalty strength: "
-            f"{normal_penalty_strength:.3f}"
-        )
-
-        print(
-            "Hard ownership assignments:"
-        )
-
-        for influence, count in (
-            result.assignment_counts.items()
-        ):
-            print(
-                f"  {influence}: {count}"
-            )
-
-        if result.fallback_vertex_count:
-            cmds.warning(
-                "Constrained bind completed, but "
-                f"{result.fallback_vertex_count} vertices had no valid "
-                "constrained candidate and used the distance fallback."
-            )
+        builtins.AD_SKIN_V27_RESULT = result
+        automatic_surface_commands.print_report(result)
 
         _info(
-            "Constrained Closest bind complete: "
-            f"{result.vertex_count} vertices, exactly one influence "
-            "per vertex."
+            "Automatic Surface bind complete: {} vertices, exactly one "
+            "influence per vertex.".format(result.vertex_count)
         )
-
     except Exception as exc:
         _show_error(exc)
+    finally:
+        if wait_cursor_active:
+            try:
+                cmds.waitCursor(state=False)
+            except Exception:
+                pass
+        _set_bind_busy(False)
+
+
+def _set_bind_busy(busy, status=""):
+    _STATE["busy"] = bool(busy)
+
+    if cmds.button(CTRL_BIND_BUTTON, exists=True):
+        cmds.button(
+            CTRL_BIND_BUTTON,
+            edit=True,
+            enable=not busy,
+            label="Binding..." if busy else "Bind Automatic Surface",
+        )
+
+    if cmds.textScrollList(CTRL_JOINT_LIST, exists=True):
+        cmds.textScrollList(
+            CTRL_JOINT_LIST,
+            edit=True,
+            enable=not busy,
+        )
+
+    if cmds.progressBar(CTRL_BIND_PROGRESS, exists=True):
+        kwargs = {"edit": True, "visible": bool(busy)}
+        try:
+            cmds.progressBar(
+                CTRL_BIND_PROGRESS,
+                isIndeterminate=bool(busy),
+                **kwargs
+            )
+        except TypeError:
+            cmds.progressBar(
+                CTRL_BIND_PROGRESS,
+                progress=50 if busy else 0,
+                **kwargs
+            )
+
+    if cmds.text(CTRL_BIND_STATUS, exists=True):
+        cmds.text(
+            CTRL_BIND_STATUS,
+            edit=True,
+            label=status if busy else "",
+            visible=bool(busy),
+        )
+
+    try:
+        cmds.refresh(force=True)
+    except Exception:
+        pass
+
 
 def show_help():
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v2.5",
+        title="AD Skin Weights Tool v2.7",
         message=(
-            "Constrained Closest Bone Workflow:\n\n"
+            "Automatic Surface Workflow:\n\n"
             "1. Select an unskinned mesh.\n"
             "2. Click Load Mesh / Skin.\n"
-            "3. Select the bind joints in Maya.\n"
+            "3. Select every intended bind joint in Maya.\n"
             "4. Click Add Selected.\n"
-            "5. Use the default constraint values first.\n"
-            "6. Click Bind Constrained Closest.\n\n"
-
-            "Current diagnostic stage:\n"
-            "- Exactly one influence per vertex.\n"
-            "- Uses distance to parent-owned joint segments.\n"
-            "- Rejects vertices too far behind a joint root.\n"
-            "- Uses vertex normals as a soft outward penalty.\n"
-            "- Uses special backward limits for terminal joints.\n"
-            "- Does not perform smoothing.\n"
-            "- Does not create soft weights.\n\n"
-
-            "Root Back Limit:\n"
-            "Controls how far behind a bone root that bone may own.\n\n"
-
-            "Terminal Back Limit:\n"
-            "Controls how far backward terminal joints may own vertices.\n\n"
-
-            "Normal Penalty:\n"
-            "Discourages ownership by bones located outside the "
-            "outward-facing side of a vertex.\n\n"
-
-            "First evaluate ownership regions only. Do not evaluate final "
-            "deformation quality yet."
+            "5. Click Bind Automatic Surface.\n\n"
+            "The solver automatically:\n"
+            "- discovers radial surface seeds where available;\n"
+            "- keeps all listed joints active;\n"
+            "- evaluates every topology component against every joint;\n"
+            "- floods ownership using weighted surface distance;\n"
+            "- writes one influence at weight 1.0 per vertex.\n\n"
+            "No fallback joint, shell-joint list, body-part mapping, or "
+            "left/right rule is required.\n\n"
+            "v2.7 does not perform smoothing or soft transitions. "
+            "Those stages belong to v2.8."
         ),
         button=["OK"],
     )
+
 
 def show_environment_report():
     cmds.confirmDialog(
@@ -728,6 +618,13 @@ def show_environment_report():
         message=environment_report(),
         button=["OK"],
     )
+
+
+def _require_not_busy():
+    if _STATE.get("busy"):
+        raise RuntimeError(
+            "Automatic Surface binding is already running."
+        )
 
 
 def _require_loaded_mesh():
@@ -739,7 +636,6 @@ def _require_loaded_mesh():
 
 def _require_unskinned_mesh():
     _require_loaded_mesh()
-
     if _STATE.get("has_skin_cluster"):
         raise RuntimeError(
             "This mesh already has a skinCluster.\n\n"
@@ -758,15 +654,11 @@ def _set_option_menu_items(menu_name, items):
         cmds.deleteUI(item)
 
     for item in items:
-        cmds.menuItem(
-            label=item,
-            parent=menu_name,
-        )
+        cmds.menuItem(label=item, parent=menu_name)
 
 
 def _set_joint_list(joints):
     normalized_joints = _unique_joint_paths(joints)
-
     _STATE["joints"] = normalized_joints
     _STATE["joint_display_to_path"] = {}
     _STATE["joint_path_to_display"] = {}
@@ -778,131 +670,91 @@ def _set_joint_list(joints):
     )
 
     for joint in normalized_joints:
-        display_name = _make_unique_joint_label(
-            joint,
-            normalized_joints,
-        )
-
-        _STATE["joint_display_to_path"][display_name] = joint
-        _STATE["joint_path_to_display"][joint] = display_name
-
+        label = _make_unique_joint_label(joint, normalized_joints)
+        _STATE["joint_display_to_path"][label] = joint
+        _STATE["joint_path_to_display"][joint] = label
         cmds.textScrollList(
             CTRL_JOINT_LIST,
             edit=True,
-            append=display_name,
+            append=label,
         )
 
 
 def _update_joint_count_label():
-    joints = _STATE.get("joints", [])
-
     cmds.text(
         CTRL_JOINT_LABEL,
         edit=True,
-        label=f"Joints: {len(joints)}",
+        label="Joints: {}".format(
+            builtins.len(_STATE.get("joints", []))
+        ),
     )
 
 
-def _joint_exists_in_list(
-    joint: str,
-    joint_list: list[str],
-) -> bool:
+def _joint_exists_in_list(joint, joint_list):
     normalized = _normalize_joint_path(joint)
-
-    for existing in joint_list:
-        if _normalize_joint_path(existing) == normalized:
-            return True
-
-    return False
+    return any(
+        _normalize_joint_path(existing) == normalized
+        for existing in joint_list
+    )
 
 
-def _normalize_joint_path(joint: str) -> str:
-    matches = cmds.ls(
-        joint,
-        long=True,
-        type="joint",
-    ) or []
-
-    if matches:
-        return matches[0]
-
-    return joint
+def _normalize_joint_path(joint):
+    matches = cmds.ls(joint, long=True, type="joint") or []
+    return matches[0] if matches else joint
 
 
-def _unique_joint_paths(joints: list[str]) -> list[str]:
+def _unique_joint_paths(joints):
     result = []
     seen = set()
 
     for joint in joints:
         normalized = _normalize_joint_path(joint)
-
         if normalized in seen:
             continue
-
         seen.add(normalized)
         result.append(normalized)
 
     return result
 
 
-def _make_unique_joint_label(
-    joint: str,
-    all_joints: list[str],
-) -> str:
+def _make_unique_joint_label(joint, all_joints):
     joint_parts = _dag_parts(joint)
-
     if not joint_parts:
         return joint
 
-    for depth in range(1, len(joint_parts) + 1):
+    for depth in range(1, builtins.len(joint_parts) + 1):
         label = "|".join(joint_parts[-depth:])
-        same_label_count = 0
-
-        for other_joint in all_joints:
-            other_parts = _dag_parts(other_joint)
-            other_label = "|".join(
-                other_parts[-depth:]
-            )
-
-            if other_label == label:
-                same_label_count += 1
-
-        if same_label_count == 1:
+        count = sum(
+            1
+            for other_joint in all_joints
+            if "|".join(_dag_parts(other_joint)[-depth:]) == label
+        )
+        if count == 1:
             return label
 
     return joint
 
 
-def _dag_parts(node: str) -> list[str]:
-    return [
-        part
-        for part in node.split("|")
-        if part
-    ]
+def _dag_parts(node):
+    return [part for part in node.split("|") if part]
 
 
-def _path_from_display_label(display_label: str):
+def _path_from_display_label(display_label):
     return _STATE.get(
         "joint_display_to_path",
         {},
     ).get(display_label)
 
 
-def _display_label_from_path(joint: str):
-    normalized = _normalize_joint_path(joint)
+def _display_label_from_path(joint):
     return _STATE.get(
         "joint_path_to_display",
         {},
-    ).get(normalized)
+    ).get(_normalize_joint_path(joint))
 
 
-def _label_control_row(
-    label,
-    control_builder,
-    height=ROW_HEIGHT,
-):
+def _label_control_row(label, control_builder, height=ROW_HEIGHT):
     layout = cmds.formLayout(height=height)
-
     label_control = cmds.text(
         label=label,
         align="left",
@@ -922,7 +774,7 @@ def _label_control_row(
             (control, "bottom", 2),
         ],
         attachControl=[
-            (control, "left", CONTROL_GAP, label_control),
+            (control, "left", CONTROL_GAP, label_control)
         ],
     )
 
@@ -930,16 +782,12 @@ def _label_control_row(
     return control
 
 
-def _button_row(
-    buttons,
-    height=BUTTON_HEIGHT,
-    gap=BUTTON_GAP,
-):
+def _button_row(buttons, height=BUTTON_HEIGHT, gap=BUTTON_GAP):
     layout = cmds.formLayout(
         numberOfDivisions=100,
         height=height,
     )
-    count = len(buttons)
+    count = builtins.len(buttons)
 
     if count == 0:
         cmds.setParent("..")
@@ -956,7 +804,6 @@ def _button_row(
             height=height,
             command=callback,
         )
-
         cmds.formLayout(
             layout,
             edit=True,
@@ -965,18 +812,8 @@ def _button_row(
                 (button, "bottom", 1),
             ],
             attachPosition=[
-                (
-                    button,
-                    "left",
-                    left_offset,
-                    left_position,
-                ),
-                (
-                    button,
-                    "right",
-                    right_offset,
-                    right_position,
-                ),
+                (button, "left", left_offset, left_position),
+                (button, "right", right_offset, right_position),
             ],
         )
 
@@ -984,7 +821,7 @@ def _button_row(
     return layout
 
 
-def _info(message: str):
+def _info(message):
     cmds.inViewMessage(
         assistMessage=message,
         position="topCenter",
@@ -992,7 +829,7 @@ def _info(message: str):
     )
 
 
-def _show_error(exc: Exception):
+def _show_error(exc):
     traceback.print_exc()
     cmds.warning(str(exc))
     cmds.confirmDialog(
