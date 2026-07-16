@@ -12,6 +12,10 @@ def reload_modules():
     import ad_skin_tools.core.surface_distance as surface_distance
     import ad_skin_tools.core.segment_solver as segment_solver
     import ad_skin_tools.core.ownership_solver as ownership_solver
+    import ad_skin_tools.core.joint_surface_solver as joint_surface_solver
+    import ad_skin_tools.core.joint_seed_competition as joint_seed_competition
+    import ad_skin_tools.core.joint_automatic_bind as joint_automatic_bind
+    import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.commands as commands
     import ad_skin_tools.ui.tool_window as tool_window
 
@@ -26,6 +30,10 @@ def reload_modules():
         ownership_solver,
         surface_distance,
         segment_solver,
+        joint_surface_solver,
+        joint_seed_competition,
+        joint_automatic_bind,
+        automatic_surface_commands,
         commands,
         tool_window,
     ]:
@@ -37,4 +45,7 @@ def show(reload=False, auto_refresh=False):
         reload_modules()
 
     from ad_skin_tools.ui import tool_window
-    tool_window.show(auto_refresh=auto_refresh)
+
+    tool_window.show(
+        auto_refresh=auto_refresh
+    )
