@@ -59,19 +59,26 @@ def _selected_mesh_and_joints():
         if shapes:
             mesh_nodes.append(node)
 
-    mesh_nodes = list(dict.fromkeys(mesh_nodes))
-    joints = list(dict.fromkeys(joints))
+    # Maya's persistent Script Editor namespace may already contain variables
+    # named list, dict, or len. Resolve these explicitly from builtins so the
+    # runner remains safe when executed through exec().
+    mesh_nodes = builtins.list(
+        builtins.dict.fromkeys(mesh_nodes)
+    )
+    joints = builtins.list(
+        builtins.dict.fromkeys(joints)
+    )
 
-    if len(mesh_nodes) != 1:
-        raise RuntimeError(
+    if builtins.len(mesh_nodes) != 1:
+        raise builtins.RuntimeError(
             "Select exactly one polygon mesh transform or shape.\n\n"
             "Resolved mesh nodes: {}".format(
-                len(mesh_nodes)
+                builtins.len(mesh_nodes)
             )
         )
 
-    if len(joints) < 2:
-        raise RuntimeError(
+    if builtins.len(joints) < 2:
+        raise builtins.RuntimeError(
             "Select at least two bind joints together with the mesh."
         )
 
@@ -92,6 +99,6 @@ joint_automatic_bind.print_automatic_surface_report(
     result
 )
 
-print(
+builtins.print(
     "\nSaved result as builtins.AD_SKIN_V27_RESULT"
 )
