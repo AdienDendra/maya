@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import heapq
 import time
 
@@ -21,6 +21,24 @@ from ad_skin_tools.core.undo import undo_chunk
 
 np = ensure_numpy()
 
+@dataclass(frozen=True)
+class SurfacePropagationOptions:
+    """
+    AD Skin Tool v2.6 Phase 3 options.
+
+    A disconnected polygon shell with no competitive seeds may be
+    assigned completely to one explicit fallback influence.
+
+    This does not affect shells that already contain seeds.
+    """
+
+    assign_unseeded_shells: bool = True
+
+    # Full path or short name accepted.
+    #
+    # Example:
+    #     "R_arm_hand_BND"
+    fallback_joint: Optional[str] = None
 
 @dataclass(frozen=True)
 class SurfacePropagationResult:
@@ -45,6 +63,9 @@ class SurfacePropagationResult:
     seed_count: int
 
     uncovered_vertex_count: int
+    fallback_shell_count: int
+    fallback_vertex_count: int
+    fallback_influence: Optional[str]
 
     average_surface_distance: float
     maximum_surface_distance: float
@@ -62,6 +83,7 @@ class SurfacePropagationResult:
 
 def bind_competitive_surface_ownership(
     competitive_result: CompetitiveSeedResult,
+    options: Optional[SurfacePropagationOptions] = None,
 ) -> SurfacePropagationResult:
     """
     Propagate exclusive Phase-2 seeds over the polygon topology.
@@ -84,6 +106,8 @@ def bind_competitive_surface_ownership(
     - All propagation travels through connected polygon edges.
     - Unreachable vertices cause an error instead of a silent fallback.
     """
+    options = options or SurfacePropagationOptions()
+    
     started = time.perf_counter()
 
     mesh_shape = competitive_result.mesh_shape
@@ -165,37 +189,115 @@ def bind_competitive_surface_ownership(
         vertex_count=vertex_count,
     )
 
+    # Distance statistics only describe vertices reached through actual
+    # topology propagation. Disconnected fallback shells have no valid
+    # surface path to the source seeds and must not affect these values.
+    propagated_distances = surface_distances[
+        np.isfinite(
+            surface_distances
+        )
+    ]
+
+    if propagated_distances.size == 0:
+        raise RuntimeError(
+            "Surface propagation did not reach any mesh vertices."
+        )
+
+    average_surface_distance = float(
+        np.mean(
+            propagated_distances
+        )
+    )
+
+    maximum_surface_distance = float(
+        np.max(
+            propagated_distances
+        )
+    )
+
     uncovered_vertex_ids = np.where(
         owner_indices < 0
     )[0]
 
+    fallback_shell_count = 0
+    fallback_vertex_count = 0
+    fallback_influence = None
+
+    if uncovered_vertex_ids.size:
+        if not options.assign_unseeded_shells:
+            raise RuntimeError(
+                "Phase 3 found disconnected shells without seeds.\n\n"
+                "Uncovered vertices: {}\n"
+                "First uncovered IDs: {}".format(
+                    int(
+                        uncovered_vertex_ids.size
+                    ),
+                    uncovered_vertex_ids[
+                        :20
+                    ].tolist(),
+                )
+            )
+
+        (
+            fallback_owner_index,
+            fallback_influence,
+        ) = _resolve_fallback_owner(
+            fallback_joint=options.fallback_joint,
+            influences=influences,
+        )
+
+        fallback_components = _connected_components_from_ids(
+            adjacency=adjacency,
+            vertex_ids=uncovered_vertex_ids,
+        )
+
+        fallback_shell_count = len(
+            fallback_components
+        )
+
+        for component in fallback_components:
+            component_ids = np.asarray(
+                sorted(
+                    component
+                ),
+                dtype=np.int32,
+            )
+
+            owner_indices[
+                component_ids
+            ] = fallback_owner_index
+
+            # These vertices have no meaningful propagated distance because
+            # their shell is disconnected from all competitive seeds.
+            surface_distances[
+                component_ids
+            ] = 0.0
+
+            fallback_vertex_count += int(
+                component_ids.size
+            )
+
+        cmds.warning(
+            "AD Skin v2.6 assigned {} disconnected shell(s), "
+            "{} vertices total, to fallback influence: {}".format(
+                fallback_shell_count,
+                fallback_vertex_count,
+                fallback_influence,
+            )
+        )
+
     uncovered_count = int(
-        uncovered_vertex_ids.size
+        np.count_nonzero(
+            owner_indices < 0
+        )
     )
 
     if uncovered_count:
         raise RuntimeError(
-            "Phase 3 could not reach every mesh vertex through topology.\n\n"
-            "Uncovered vertices: {}\n"
-            "First uncovered IDs: {}\n\n"
-            "This normally means the mesh has a disconnected shell that "
-            "does not contain any competitive seed. No world-space fallback "
-            "was applied because it could produce incorrect ownership.".format(
-                uncovered_count,
-                uncovered_vertex_ids[
-                    :20
-                ].tolist(),
-            )
+            "One or more vertices remain without an owner after "
+            "disconnected-shell fallback."
         )
 
-    if not np.all(
-        np.isfinite(
-            surface_distances
-        )
-    ):
-        raise RuntimeError(
-            "Surface propagation produced non-finite distances."
-        )
 
     owner_vertex_ids = _build_owner_vertex_map(
         owner_indices=owner_indices,
@@ -308,16 +410,24 @@ def bind_competitive_surface_ownership(
                     uncovered_count
                 ),
 
-                average_surface_distance=float(
-                    np.mean(
-                        surface_distances
-                    )
+                fallback_shell_count=(
+                    fallback_shell_count
                 ),
 
-                maximum_surface_distance=float(
-                    np.max(
-                        surface_distances
-                    )
+                fallback_vertex_count=(
+                    fallback_vertex_count
+                ),
+
+                fallback_influence=(
+                    fallback_influence
+                ),
+
+                average_surface_distance=(
+                    average_surface_distance
+                ),
+
+                maximum_surface_distance=(
+                    maximum_surface_distance
                 ),
 
                 seed_counts=seed_counts,
@@ -466,6 +576,22 @@ def print_surface_propagation_report(
     print(
         "Uncovered vertices:",
         result.uncovered_vertex_count,
+    )
+
+    print(
+        "Fallback shells:",
+        result.fallback_shell_count,
+    )
+
+    print(
+        "Fallback vertices:",
+        result.fallback_vertex_count,
+    )
+
+    print(
+        "Fallback influence:",
+        result.fallback_influence
+        or "None",
     )
 
     print(
@@ -850,6 +976,124 @@ def _propagate_owners(
         distances,
     )
 
+def _resolve_fallback_owner(
+    fallback_joint: Optional[str],
+    influences: Tuple[str, ...],
+) -> Tuple[int, str]:
+    """
+    Resolve the explicit influence used for disconnected shells.
+
+    An explicit joint is required. We deliberately avoid guessing because
+    nearest-joint logic could assign an entire disconnected shell to an
+    unintended finger influence.
+    """
+    if not fallback_joint:
+        raise RuntimeError(
+            "Disconnected shells were found, but no fallback_joint was "
+            "specified.\n\n"
+            "Example:\n"
+            'SurfacePropagationOptions(fallback_joint="R_arm_hand_BND")'
+        )
+
+    matches = cmds.ls(
+        fallback_joint,
+        long=True,
+        type="joint",
+    ) or []
+
+    if not matches:
+        raise RuntimeError(
+            "Fallback joint does not exist:\n{}".format(
+                fallback_joint
+            )
+        )
+
+    fallback_path = matches[0]
+
+    try:
+        owner_index = influences.index(
+            fallback_path
+        )
+
+    except ValueError:
+        raise RuntimeError(
+            "Fallback joint is not part of the competitive influence list."
+            "\n\nFallback joint:\n{}\n\nAvailable influences:\n{}".format(
+                fallback_path,
+                "\n".join(
+                    influences
+                ),
+            )
+        )
+
+    return (
+        int(
+            owner_index
+        ),
+        fallback_path,
+    )
+
+
+def _connected_components_from_ids(
+    adjacency,
+    vertex_ids: np.ndarray,
+) -> List[set]:
+    """
+    Split uncovered vertices into disconnected topology components.
+    """
+    remaining = {
+        int(vertex_id)
+        for vertex_id in vertex_ids
+    }
+
+    components = []
+
+    while remaining:
+        start_vertex = remaining.pop()
+
+        component = {
+            start_vertex
+        }
+
+        stack = [
+            start_vertex
+        ]
+
+        while stack:
+            vertex_id = stack.pop()
+
+            for neighbor_id, _edge_length in adjacency[
+                vertex_id
+            ]:
+                neighbor_id = int(
+                    neighbor_id
+                )
+
+                if neighbor_id not in remaining:
+                    continue
+
+                remaining.remove(
+                    neighbor_id
+                )
+
+                component.add(
+                    neighbor_id
+                )
+
+                stack.append(
+                    neighbor_id
+                )
+
+        components.append(
+            component
+        )
+
+    components.sort(
+        key=len,
+        reverse=True,
+    )
+
+    return components
 
 def _build_owner_vertex_map(
     owner_indices: np.ndarray,
