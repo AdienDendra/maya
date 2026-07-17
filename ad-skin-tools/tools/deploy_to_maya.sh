@@ -5,9 +5,7 @@ REPO="$HOME/dev/dcc/maya/ad-skin-tools"
 
 PACKAGE_SRC="$REPO/ad_skin_tools"
 PACKAGE_DST="/mnt/c/Users/Arzio/Documents/maya/2023/scripts/ad_skin_tools"
-
-TEST_SRC="$REPO/scripts/test_v27_automatic_surface.py"
-TEST_DST="/mnt/c/Users/Arzio/Documents/maya/2023/scripts/test_v27_automatic_surface.py"
+SCRIPT_DST_DIR="/mnt/c/Users/Arzio/Documents/maya/2023/scripts"
 
 echo "Deploying AD Skin Tools..."
 echo "Package from: $PACKAGE_SRC"
@@ -22,11 +20,20 @@ rm -rf "$PACKAGE_DST"
 mkdir -p "$(dirname "$PACKAGE_DST")"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
 
-if [ -f "$TEST_SRC" ]; then
-    echo "Deploying v2.7 test runner..."
-    cp "$TEST_SRC" "$TEST_DST"
-else
-    echo "Warning: test runner not found: $TEST_SRC"
+mkdir -p "$SCRIPT_DST_DIR"
+found_runner=false
+for test_src in "$REPO"/scripts/test_*.py; do
+    if [ ! -f "$test_src" ]; then
+        continue
+    fi
+
+    found_runner=true
+    echo "Deploying smoke runner: $(basename "$test_src")"
+    cp "$test_src" "$SCRIPT_DST_DIR/$(basename "$test_src")"
+done
+
+if [ "$found_runner" = false ]; then
+    echo "Warning: no smoke runners found in $REPO/scripts"
 fi
 
 echo "Done."
