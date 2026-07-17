@@ -1,61 +1,97 @@
 # AD Skin Tool v3
 
-Version 3 is a new solver foundation and is intentionally isolated from
-`ad_skin_tools.core`. The v2.x implementation remains available as a reference
-and is not imported by the v3 smoke-test path.
+Version 3 is a new solver foundation isolated from `ad_skin_tools.core`. The
+v2.x implementation remains available as a reference and is not imported by the
+v3 smoke-test path.
 
 ## Universal constraints
 
-Production ownership must be derived from the supplied geometry and joints.
-The solver must not use body-part names, joint-name conventions, calibrated
-percentages, tuned multipliers, minimum vertex quotas, or sample-specific
-rules. Performance-only chunking is allowed because it must not change the
-mathematical result.
+Production ownership must be derived from supplied geometry and joints. The
+solver must not use body-part names, joint-name conventions, calibrated
+percentages, tuned multipliers, minimum vertex quotas, or sample-specific rules.
 
-## Staged pipeline
+## Accepted rollback baseline: v3.0
 
-Each stage is implemented and accepted independently. A later stage may reject
-or constrain candidates from an earlier stage, but it must not silently alter
-the earlier stage's recorded data.
+`scripts/test_v30_distance_ranking.py` compares every world-space mesh vertex
+with every supplied joint pivot using exact squared Euclidean distance.
 
-1. **Exact distance ranking**
-   - **1A. Exact joint-pivot ranking — current smoke stage**
-     - Compare each world-space mesh vertex with every supplied joint pivot.
-     - Record unique nearest joints.
-     - Preserve exact ties as unresolved.
-     - Detect joint groups with exactly coincident world positions.
-     - Do not create or edit a skinCluster.
-   - **1B. Native Closest Distance primitive audit — not implemented**
-     - Compare stage 1A against Maya `bindMethod=0`.
-     - Determine the exact contribution of each joint's outgoing bone segment.
-     - Do not assume that pivot distance alone reproduces Maya.
-
-2. **Topology-component validation** — not implemented
-
-3. **First-surface visibility validation** — not implemented
-
-4. **Normal-facing consistency** — not implemented
-
-5. **Skeleton-graph competition constraint** — not implemented
-
-6. **Deterministic owner resolution** — not implemented
-
-## Stage-1A smoke test
-
-Run `scripts/test_v30_distance_ranking.py` in Maya after selecting exactly one
-polygon mesh and every joint to evaluate. The result is stored as:
+The result is stored as:
 
 ```python
 builtins.AD_SKIN_V30_DISTANCE_RESULT
 ```
 
-Inspect the complete ranking for one vertex with:
+v3.0 does not read topology, normals, visibility, or hierarchy, and does not
+create or modify a skinCluster.
+
+## Previous experiments
+
+- **v3.1 pivot visibility — rejected.** Direct pivot-to-vertex visibility caused
+  self-occlusion and rejected valid vertices on the source finger.
+- **v3.2 incoming-segment visibility — partial and non-universal.** It improved
+  the finger result but required a deformation joint ancestor in the Maya DAG.
+  Production rigs do not universally encode logical deformation chains as DAG
+  joint ancestry.
+
+Neither experiment is inherited by v3.3.
+
+## Current smoke stage: v3.3 raw-ownership connectivity
+
+v3.3 investigates one selected influence at a time:
+
+1. Take every vertex raw-owned by that influence in v3.0.
+2. Build the mesh-edge graph induced only by those vertices.
+3. Find every exact connected region in that induced graph.
+4. Find the raw vertex or vertices with the exact minimum distance to the joint.
+5. The connected region containing the exact-nearest anchor is the primary
+   region when that anchor region is unique.
+6. Every other connected region is reported as a detached ownership island.
+
+There is no largest-region rule, minimum island size, visibility ray, vertex
+normal, joint hierarchy, replacement owner, or skin-weight write.
+
+If exact-nearest anchor vertices occur in more than one connected region, the
+primary region is underdetermined and v3.3 reports all anchor regions instead of
+choosing one artificially.
+
+## v3.3 smoke workflow
+
+1. Run `scripts/test_v30_distance_ranking.py` with one mesh and the complete
+   joint list selected.
+2. Select exactly one influence to inspect.
+3. Run `scripts/test_v33_ownership_connectivity_probe.py`.
+
+The result is stored as:
 
 ```python
-from ad_skin_tools.v3.distance_ranking import format_vertex_ranking
-print(format_vertex_ranking(builtins.AD_SKIN_V30_DISTANCE_RESULT, 0))
+builtins.AD_SKIN_V33_CONNECTIVITY_RESULT
 ```
 
-Stage 1A deliberately reports exact ties and zero-region joints. It does not
-attempt to fix them and is not yet a clone of Maya Closest Distance. The report
-provides the reference data needed by stage 1B and the later validation stages.
+When the primary region is unambiguous, detached vertices are selected
+automatically. Selection helpers:
+
+```python
+from ad_skin_tools.v3.ownership_connectivity_probe import select_probe_vertices
+
+select_probe_vertices(
+    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
+    category="primary",
+)
+select_probe_vertices(
+    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
+    category="detached",
+)
+select_probe_vertices(
+    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
+    category="anchors",
+)
+```
+
+## Explicitly deferred
+
+- assigning detached islands to replacement joints;
+- combined-object and multiple-shell policy;
+- normal-facing logic;
+- skeleton-graph competition;
+- final ownership resolution;
+- skinCluster creation or weight writing.
