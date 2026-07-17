@@ -6,7 +6,7 @@ def _install_component_flood(
     component_flood_section,
     joint_tree_maya2023,
 ):
-    """Install the composed v4 UI even after Maya module reloads."""
+    """Install the composed v4.1 UI after Maya module reloads."""
 
     joint_tree_maya2023.patch(component_flood_section)
     installed_bind_builder = getattr(
@@ -44,6 +44,9 @@ def _install_component_flood(
                 pass
 
     component_flood_section.install(tool_window)
+    tool_window._build_skin_cluster_section = (
+        joint_tree_maya2023._build_skin_cluster_section
+    )
 
 
 def reload_modules():
@@ -103,8 +106,8 @@ def reload_modules():
     ]:
         importlib.reload(module)
 
-    # Reload composition and compatibility builders first, restore the base UI,
-    # then install v4.1 against the fresh tool-window functions.
+    # Restore the base UI, reload the two v4.1 composition modules, then install
+    # their current builders exactly once.
     importlib.reload(component_flood_section)
     importlib.reload(joint_tree_maya2023)
     importlib.reload(tool_window)
