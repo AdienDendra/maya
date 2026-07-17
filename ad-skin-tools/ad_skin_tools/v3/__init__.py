@@ -4,11 +4,11 @@ Version 3 is intentionally isolated from ``ad_skin_tools.core``. Each solver
 stage is introduced and smoke-tested independently before it becomes part of a
 production bind pipeline.
 
-Accepted baseline:
-    1A. exact world-space joint-pivot distance ranking.
+Accepted rollback baseline:
+    v3.0 exact world-space joint-pivot distance ranking.
 
 Current focused smoke stage:
-    first-surface visibility for one selected raw distance owner.
+    v3.1 first-surface visibility for one selected raw distance owner.
 """
 
 from ad_skin_tools.v3.distance_ranking import (
