@@ -12,50 +12,90 @@ percentages, tuned multipliers, minimum vertex quotas, or sample-specific
 rules. Performance-only chunking is allowed because it must not change the
 mathematical result.
 
-## Staged pipeline
+## Development rule
 
-Each stage is implemented and accepted independently. A later stage may reject
-or constrain candidates from an earlier stage, but it must not silently alter
-the earlier stage's recorded data.
+Only one failure mode is investigated at a time. Multiple-shell handling,
+topology-component partitioning, normal consistency, hierarchy constraints,
+and skin-weight writing are outside the current smoke-test scope.
 
-1. **Exact distance ranking**
-   - **1A. Exact joint-pivot ranking — current smoke stage**
-     - Compare each world-space mesh vertex with every supplied joint pivot.
-     - Record unique nearest joints.
-     - Preserve exact ties as unresolved.
-     - Detect joint groups with exactly coincident world positions.
-     - Do not create or edit a skinCluster.
-   - **1B. Native Closest Distance primitive audit — not implemented**
-     - Compare stage 1A against Maya `bindMethod=0`.
-     - Determine the exact contribution of each joint's outgoing bone segment.
-     - Do not assume that pivot distance alone reproduces Maya.
+## Accepted baseline: exact pivot-distance ranking
 
-2. **Topology-component validation** — not implemented
+`scripts/test_v30_distance_ranking.py` compares every world-space mesh vertex
+with every supplied joint pivot using exact squared Euclidean distance.
 
-3. **First-surface visibility validation** — not implemented
+The baseline:
 
-4. **Normal-facing consistency** — not implemented
+- records a unique nearest joint;
+- preserves exact ties as unresolved;
+- reports joints with zero unique-nearest vertices;
+- detects exactly coincident joint positions;
+- does not create or edit a skinCluster.
 
-5. **Skeleton-graph competition constraint** — not implemented
-
-6. **Deterministic owner resolution** — not implemented
-
-## Stage-1A smoke test
-
-Run `scripts/test_v30_distance_ranking.py` in Maya after selecting exactly one
-polygon mesh and every joint to evaluate. The result is stored as:
+The result is stored as:
 
 ```python
 builtins.AD_SKIN_V30_DISTANCE_RESULT
 ```
 
-Inspect the complete ranking for one vertex with:
+## Current smoke stage: focused first-surface visibility
+
+The immediate problem is cross-surface ownership between nearby fingers. The
+probe does not process the whole solver architecture and does not divide the
+mesh into topology components.
+
+Workflow:
+
+1. Run `scripts/test_v30_distance_ranking.py` with the mesh and complete joint
+   list selected.
+2. Select exactly one problematic joint, for example the joint whose raw region
+   crosses onto adjacent surfaces.
+3. Run `scripts/test_v30_visibility_probe.py`.
+
+For only the vertices raw-owned by that selected joint, the probe tests whether
+the target vertex patch is the first mesh surface reached by the segment from
+the candidate joint pivot to the target vertex.
+
+- If the target patch is hit first, the raw owner is retained in the diagnostic.
+- If another surface is hit first, the vertex is reported as cross-surface.
+- For rejected vertices, the probe searches the exact distance ranking for the
+  nearest candidate whose segment reaches the target patch first.
+- Exact-distance ties between visible candidates remain unresolved.
+- No weights are written.
+
+The probe result is stored as:
 
 ```python
-from ad_skin_tools.v3.distance_ranking import format_vertex_ranking
-print(format_vertex_ranking(builtins.AD_SKIN_V30_DISTANCE_RESULT, 0))
+builtins.AD_SKIN_V30_VISIBILITY_RESULT
 ```
 
-Stage 1A deliberately reports exact ties and zero-region joints. It does not
-attempt to fix them and is not yet a clone of Maya Closest Distance. The report
-provides the reference data needed by stage 1B and the later validation stages.
+Rejected vertices are selected automatically for visual inspection. Additional
+selection helpers are available through:
+
+```python
+from ad_skin_tools.v3.visibility_probe import select_probe_vertices
+
+select_probe_vertices(
+    builtins.AD_SKIN_V30_VISIBILITY_RESULT,
+    category="visible",
+)
+select_probe_vertices(
+    builtins.AD_SKIN_V30_VISIBILITY_RESULT,
+    category="rejected",
+)
+```
+
+Maya's documented default mesh-intersection tolerance is used explicitly in
+this smoke probe for reproducibility. It is not accepted as a production
+ownership parameter.
+
+## Deferred work
+
+The following are intentionally not designed yet:
+
+- multiple-shell or combined-object handling;
+- topology-component modes;
+- normal-facing consistency;
+- skeleton-graph competition;
+- native Maya bone-segment comparison;
+- deterministic final owner writing;
+- skinCluster creation or modification.
