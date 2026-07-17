@@ -14,6 +14,8 @@ def reload_modules():
     import ad_skin_tools.core.ownership_solver as ownership_solver
     import ad_skin_tools.core.joint_surface_solver as joint_surface_solver
     import ad_skin_tools.core.joint_seed_competition as joint_seed_competition
+    import ad_skin_tools.core.component_selection as component_selection
+    import ad_skin_tools.core.component_flood as component_flood
 
     import ad_skin_tools.region.maya_scene as region_maya_scene
     import ad_skin_tools.region.distance_ranking as region_distance_ranking
@@ -25,6 +27,7 @@ def reload_modules():
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.commands as commands
     import ad_skin_tools.ui.tool_window as tool_window
+    import ad_skin_tools.ui.component_flood_section as component_flood_section
 
     for module in [
         compat,
@@ -39,6 +42,8 @@ def reload_modules():
         segment_solver,
         joint_surface_solver,
         joint_seed_competition,
+        component_selection,
+        component_flood,
         region_maya_scene,
         region_distance_ranking,
         region_connectivity,
@@ -48,6 +53,7 @@ def reload_modules():
         automatic_surface_commands,
         commands,
         tool_window,
+        component_flood_section,
     ]:
         importlib.reload(module)
 
@@ -56,8 +62,9 @@ def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
-    from ad_skin_tools.ui import tool_window
+    from ad_skin_tools.ui import component_flood_section, tool_window
 
+    component_flood_section.install(tool_window)
     tool_window.show(
         auto_refresh=auto_refresh
     )
