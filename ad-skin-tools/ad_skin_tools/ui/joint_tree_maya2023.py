@@ -27,28 +27,9 @@ def patch(component_flood_section) -> None:
     )
     component_flood_section.select_joints_in_scene = select_joints_in_scene
 
-    # The base skin-context builder lives in tool_window.py. Wrap the composed UI
-    # installer so every supported entry point gets the shorter "Load Mesh" label
-    # without duplicating or version-branching the underlying load operation.
-    current_install = component_flood_section.install
-    if getattr(current_install, "_ad_skin_cross_version_wrapper", False):
-        original_install = current_install._ad_skin_original_install
-    else:
-        original_install = current_install
-
-    def install_with_cross_version_labels(tool_window_module):
-        original_install(tool_window_module)
-        tool_window_module._build_skin_cluster_section = (
-            _build_skin_cluster_section
-        )
-
-    install_with_cross_version_labels._ad_skin_cross_version_wrapper = True
-    install_with_cross_version_labels._ad_skin_original_install = original_install
-    component_flood_section.install = install_with_cross_version_labels
-
 
 def _build_skin_cluster_section() -> None:
-    """Build the existing mesh/skin context with a clearer Load Mesh label."""
+    """Build the mesh/skin context with the shorter Load Mesh label."""
 
     from ad_skin_tools.ui import component_flood_section as section
 
