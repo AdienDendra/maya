@@ -22,16 +22,17 @@ if [ ! -d "$PACKAGE_SRC" ]; then
     exit 1
 fi
 
-required_v4_files=(
+required_v41_files=(
     "$PACKAGE_SRC/core/component_selection.py"
+    "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/component_flood.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
 )
 
-for required_file in "${required_v4_files[@]}"; do
+for required_file in "${required_v41_files[@]}"; do
     if [ ! -f "$required_file" ]; then
-        echo "ERROR: v4 source file is missing: $required_file"
-        echo "You are probably not on feature/ad-skin-v4-component-flood or have not pulled its latest commits."
+        echo "ERROR: v4.1 source file is missing: $required_file"
+        echo "Pull the latest feature/ad-skin-v4-component-flood branch before deploying."
         exit 1
     fi
 done
@@ -46,17 +47,18 @@ find "$PACKAGE_DST" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/
 
 for relative_path in \
     "core/component_selection.py" \
+    "core/influence_lock.py" \
     "core/component_flood.py" \
     "ui/component_flood_section.py"; do
     if [ ! -f "$PACKAGE_DST/$relative_path" ]; then
-        echo "ERROR: v4 deployment verification failed: $PACKAGE_DST/$relative_path"
+        echo "ERROR: v4.1 deployment verification failed: $PACKAGE_DST/$relative_path"
         exit 1
     fi
 done
 
 mkdir -p "$SCRIPT_DST_DIR"
 
-# Remove runners from the retired experimental v3 package name.
+# Remove runners from retired experimental package names.
 rm -f \
     "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
     "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
@@ -86,7 +88,7 @@ find /mnt/c/Users/Arzio/Documents/maya \
     -print 2>/dev/null || true
 
 echo
-echo "v4 deployment verified."
+echo "v4.1 deployment verified."
 echo "Restart Maya or purge cached ad_skin_tools modules before reopening the UI."
 echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v40_install_diagnostic.py"
 echo "Done."
