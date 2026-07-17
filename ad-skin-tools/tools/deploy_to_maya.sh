@@ -58,11 +58,12 @@ done
 
 mkdir -p "$SCRIPT_DST_DIR"
 
-# Remove runners from retired experimental package names.
+# Remove runners from retired or superseded package versions.
 rm -f \
     "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
     "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
-    "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py"
+    "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py" \
+    "$SCRIPT_DST_DIR/test_v40_install_diagnostic.py"
 
 found_runner=false
 for test_src in "$REPO"/scripts/test_*.py; do
@@ -90,5 +91,5 @@ find /mnt/c/Users/Arzio/Documents/maya \
 echo
 echo "v4.1 deployment verified."
 echo "Restart Maya or purge cached ad_skin_tools modules before reopening the UI."
-echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v40_install_diagnostic.py"
+echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v41_install_diagnostic.py"
 echo "Done."
