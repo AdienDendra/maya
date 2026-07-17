@@ -2,9 +2,8 @@
 
 The implementation intentionally uses the Maya 2023-compatible creation contract,
 which also remains valid in Maya 2025 and Maya 2026. Tree items are created in one
-command and configured in subsequent commands. This avoids Maya's ``Item not
-found`` failure when ``addItem`` and item-dependent edit flags are submitted in the
-same ``treeView`` call.
+command and configured in subsequent commands. Bulk lock actions rebuild the tree
+from authoritative state so stale row IDs cannot survive a Flood refresh.
 """
 
 import maya.cmds as cmds
@@ -16,11 +15,13 @@ import maya.cmds as cmds
 
 
 def patch(component_flood_section) -> None:
-    """Install cross-version tree construction and row rendering."""
+    """Install cross-version tree construction and row-state operations."""
 
     component_flood_section._build_joints_section = _build_joints_section
     component_flood_section._set_joint_list = _set_joint_list
-
+    component_flood_section._set_joint_lock_states = _set_joint_lock_states
+    component_flood_section._render_lock_button = _render_lock_button
+    component_flood_section._selected_item_ids = _selected_item_ids
 
 
 def _build_joints_section() -> None:
@@ -73,22 +74,18 @@ def _build_joints_section() -> None:
     cmds.setParent("..")
 
 
-
 def _set_joint_list(joints) -> None:
     """Render stable joint rows across Maya 2023, 2025, and 2026.
 
-    Maya processes ``cmds`` calls synchronously, but some treeView versions do not
-    resolve an item early enough when ``addItem`` and item-dependent flags are
-    combined in a single call. Every row therefore follows an explicit sequence:
+    Every row follows an explicit sequence:
 
         create item
         set display label
-        set annotation
         configure button
         apply colour and lock icon
 
-    The sequence is slightly more verbose but deterministic across supported Maya
-    versions.
+    No per-joint annotation or button tooltip is installed. This keeps the list
+    visually quiet while retaining lock state through the icon itself.
     """
 
     from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
@@ -140,10 +137,9 @@ def _set_joint_list(joints) -> None:
         tool_window._STATE["joint_item_to_path"][item_id] = joint
         tool_window._STATE["joint_path_to_item"][joint] = item_id
 
-        # Important: do not combine these edits with addItem. Maya 2023 can try
-        # to resolve displayLabel/button flags before the new item is registered,
-        # producing RuntimeError: Item not found. The same conservative sequence
-        # is valid in Maya 2025 and Maya 2026.
+        # Do not combine these edits with addItem. Maya 2023 can try to resolve
+        # item-dependent flags before the new item is registered. The same
+        # conservative sequence remains valid in Maya 2025 and Maya 2026.
         cmds.treeView(
             control,
             edit=True,
@@ -153,17 +149,6 @@ def _set_joint_list(joints) -> None:
             control,
             edit=True,
             displayLabel=(item_id, display_label),
-        )
-        cmds.treeView(
-            control,
-            edit=True,
-            itemAnnotation=(
-                item_id,
-                "{}\n{}".format(
-                    joint,
-                    "Bound influence" if joint in bound_paths else "Pending joint",
-                ),
-            ),
         )
         cmds.treeView(
             control,
@@ -183,7 +168,7 @@ def _set_joint_list(joints) -> None:
                 textColor=(item_id,) + section._BOUND_TEXT_COLOR,
             )
 
-        section._render_lock_button(item_id, joint)
+        _render_lock_button(item_id, joint)
 
         if joint in previous_selected_paths:
             cmds.treeView(
@@ -191,3 +176,112 @@ def _set_joint_list(joints) -> None:
                 edit=True,
                 selectItem=(item_id, True),
             )
+
+
+def _set_joint_lock_states(joints, locked: bool) -> None:
+    """Store lock changes, then rebuild the entire tree from authoritative state.
+
+    A Flood may change the influence list and therefore row indices. Repainting
+    individual rows from an older ``joint_path_to_item`` mapping can address an
+    item that no longer exists. Rebuilding once after a bulk operation keeps the
+    mapping and actual tree contents atomic.
+    """
+
+    from ad_skin_tools.core.influence_lock import set_influence_locked
+    from ad_skin_tools.core.undo import undo_chunk
+    from ad_skin_tools.ui import component_flood_section as section
+
+    tool_window = section._TOOL_WINDOW
+    bound = set(tool_window._STATE.get("bound_joint_paths", set()))
+    pending_locks = set(
+        tool_window._STATE.get("pending_locked_joints", set())
+    )
+    skin_cluster = tool_window._STATE.get("skin_cluster")
+
+    with undo_chunk("AD Skin Tool Influence Locks"):
+        for joint in joints:
+            if joint in bound:
+                if not skin_cluster:
+                    raise RuntimeError("Loaded skinCluster is unavailable.")
+                set_influence_locked(skin_cluster, joint, bool(locked))
+            elif locked:
+                pending_locks.add(joint)
+            else:
+                pending_locks.discard(joint)
+
+    tool_window._STATE["pending_locked_joints"] = pending_locks
+
+    # One authoritative repaint replaces per-row edits. Selection is preserved by
+    # _set_joint_list using only item IDs that still exist in the current tree.
+    _set_joint_list(list(tool_window._STATE.get("joints", [])))
+    tool_window._update_joint_count_label()
+
+
+def _render_lock_button(item_id: str, joint: str) -> None:
+    """Render only the icon/text state; intentionally install no tooltip."""
+
+    from ad_skin_tools.ui import component_flood_section as section
+
+    tool_window = section._TOOL_WINDOW
+    control = tool_window.CTRL_JOINT_LIST
+    if not _tree_item_exists(control, item_id):
+        return
+
+    locked = section._joint_is_locked(joint)
+    icon = section._lock_icon(locked)
+    if icon:
+        cmds.treeView(
+            control,
+            edit=True,
+            image=(item_id, 1, icon),
+        )
+    else:
+        cmds.treeView(
+            control,
+            edit=True,
+            buttonTextIcon=(item_id, 1, "L" if locked else "U"),
+        )
+
+
+def _selected_item_ids():
+    """Return selected rows while silently discarding stale mapping entries."""
+
+    from ad_skin_tools.ui import component_flood_section as section
+
+    tool_window = section._TOOL_WINDOW
+    control = tool_window.CTRL_JOINT_LIST
+    if not cmds.treeView(control, exists=True):
+        return []
+
+    result = []
+    for item_id in tool_window._STATE.get("joint_item_to_path", {}):
+        if not _tree_item_exists(control, item_id):
+            continue
+        try:
+            selected = cmds.treeView(
+                control,
+                query=True,
+                itemSelected=item_id,
+            )
+        except Exception:
+            selected = False
+        if selected:
+            result.append(item_id)
+    return result
+
+
+def _tree_item_exists(control: str, item_id: str) -> bool:
+    """Query tree membership before using an item-dependent flag."""
+
+    if not cmds.treeView(control, exists=True):
+        return False
+    try:
+        return bool(
+            cmds.treeView(
+                control,
+                query=True,
+                itemExists=item_id,
+            )
+        )
+    except Exception:
+        return False
