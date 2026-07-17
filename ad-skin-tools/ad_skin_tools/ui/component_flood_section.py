@@ -6,8 +6,6 @@ editing rules only enough to stage a new target influence for Component Flood.
 """
 
 import builtins
-import traceback
-
 import maya.cmds as cmds
 
 from ad_skin_tools.core import component_flood
@@ -19,8 +17,6 @@ CTRL_FLOOD_BUTTON = "adSkin_floodSelectedToJointButton"
 CTRL_FLOOD_STATUS = "adSkin_floodSelectedToJointStatus"
 
 _TOOL_WINDOW = None
-_ORIGINAL_BUILD_INITIAL_BIND_SECTION = None
-_ORIGINAL_ADD_SELECTED_JOINTS = None
 _ORIGINAL_REMOVE_SELECTED_JOINTS = None
 _ORIGINAL_REMOVE_ALL_JOINTS = None
 
@@ -29,8 +25,6 @@ def install(tool_window_module) -> None:
     """Compose the v4.0 flood operation into the existing tool window module."""
 
     global _TOOL_WINDOW
-    global _ORIGINAL_BUILD_INITIAL_BIND_SECTION
-    global _ORIGINAL_ADD_SELECTED_JOINTS
     global _ORIGINAL_REMOVE_SELECTED_JOINTS
     global _ORIGINAL_REMOVE_ALL_JOINTS
 
@@ -38,10 +32,6 @@ def install(tool_window_module) -> None:
     if getattr(tool_window_module, "_V4_COMPONENT_FLOOD_INSTALLED", False):
         return
 
-    _ORIGINAL_BUILD_INITIAL_BIND_SECTION = (
-        tool_window_module._build_initial_bind_section
-    )
-    _ORIGINAL_ADD_SELECTED_JOINTS = tool_window_module.add_selected_joints
     _ORIGINAL_REMOVE_SELECTED_JOINTS = tool_window_module.remove_selected_joints
     _ORIGINAL_REMOVE_ALL_JOINTS = tool_window_module.remove_all_joints
 
@@ -59,8 +49,62 @@ def install(tool_window_module) -> None:
 
 
 def _build_bind_sections() -> None:
-    _ORIGINAL_BUILD_INITIAL_BIND_SECTION()
+    _build_initial_bind_section_v4()
     _build_component_flood_section()
+
+
+def _build_initial_bind_section_v4() -> None:
+    cmds.frameLayout(
+        label="Initial Automatic Bind (Region v3)",
+        collapsable=True,
+        collapse=False,
+        marginWidth=6,
+        marginHeight=6,
+    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
+
+    cmds.text(
+        label="Automatic Surface",
+        align="left",
+        font="boldLabelFont",
+    )
+    cmds.text(
+        label=(
+            "For an unskinned mesh: automatically calculate Region ownership "
+            "across all connected and disconnected surface components."
+        ),
+        align="left",
+        wordWrap=True,
+    )
+    cmds.button(
+        _TOOL_WINDOW.CTRL_BIND_BUTTON,
+        label="Bind Automatic Surface",
+        height=38,
+        command=lambda *_: _TOOL_WINDOW.apply_operation(),
+        annotation=(
+            "Bind the loaded unskinned mesh using all joints in the UI list. "
+            "No fallback joint or manual shell assignment is required."
+        ),
+    )
+    _TOOL_WINDOW._create_bind_progress_bar()
+    cmds.text(
+        _TOOL_WINDOW.CTRL_BIND_STATUS,
+        label="",
+        align="left",
+        wordWrap=True,
+        visible=False,
+    )
+    cmds.text(
+        label=(
+            "Region v3 writes exactly one influence at weight 1.0 per vertex. "
+            "Use Component Flood below for explicit local overrides."
+        ),
+        align="left",
+        wordWrap=True,
+    )
+
+    cmds.setParent("..")
+    cmds.setParent("..")
 
 
 def _build_component_flood_section() -> None:
@@ -279,12 +323,13 @@ def apply_component_flood() -> None:
         wait_cursor_active = True
         cmds.refresh(force=True)
 
+        staged_joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
         result = component_flood.flood_selected_components_to_joint(
             mesh_shape=_TOOL_WINDOW._STATE["mesh_shape"],
             mesh_transform=_TOOL_WINDOW._STATE["mesh_transform"],
             target_joint=target_joint,
         )
-        _TOOL_WINDOW._sync_loaded_skin_context()
+        _sync_after_flood_preserving_pending(staged_joints)
         _select_target_in_list(result.target_joint)
 
         builtins.AD_SKIN_V40_FLOOD_RESULT = result
@@ -305,7 +350,6 @@ def apply_component_flood() -> None:
             )
         )
     except Exception as exc:
-        traceback.print_exc()
         _TOOL_WINDOW._show_error(exc)
     finally:
         if wait_cursor_active:
@@ -314,6 +358,20 @@ def apply_component_flood() -> None:
             except Exception:
                 pass
         _set_flood_busy(False)
+
+
+def _sync_after_flood_preserving_pending(staged_joints) -> None:
+    _TOOL_WINDOW._sync_loaded_skin_context()
+    current_influences = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+    current_set = set(current_influences)
+    pending = [
+        joint
+        for joint in staged_joints
+        if joint not in current_set and cmds.objExists(joint)
+    ]
+    if pending:
+        _TOOL_WINDOW._set_joint_list(current_influences + pending)
+        _TOOL_WINDOW._update_joint_count_label()
 
 
 def _select_target_in_list(target_joint: str) -> None:
