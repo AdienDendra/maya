@@ -67,38 +67,46 @@ def flood_selected_components_to_joint(
     resolved_joint = _resolve_joint(target_joint)
     adapter = SkinClusterAdapter.from_mesh(scope.mesh_shape)
     influence_added = False
+    mutation_recorded = False
 
     try:
-        with undo_chunk("AD Skin Tool Component Flood"):
-            if resolved_joint not in adapter.influences():
-                _add_influence(
-                    skin_cluster=adapter.skin_cluster,
-                    joint=resolved_joint,
-                )
-                influence_added = True
-                adapter = SkinClusterAdapter.from_mesh(scope.mesh_shape)
+        try:
+            with undo_chunk("AD Skin Tool Component Flood"):
+                if resolved_joint not in adapter.influences():
+                    _add_influence(
+                        skin_cluster=adapter.skin_cluster,
+                        joint=resolved_joint,
+                    )
+                    influence_added = True
+                    mutation_recorded = True
+                    adapter = SkinClusterAdapter.from_mesh(scope.mesh_shape)
 
-            vertex_ids = np.asarray(scope.vertex_ids, dtype=np.int32)
-            influences = tuple(adapter.influences())
-            try:
-                target_column = influences.index(resolved_joint)
-            except ValueError:
-                raise RuntimeError(
-                    "Target joint was not found in the skinCluster after Add "
-                    "Influence:\n{}".format(resolved_joint)
-                )
+                vertex_ids = np.asarray(scope.vertex_ids, dtype=np.int32)
+                influences = tuple(adapter.influences())
+                try:
+                    target_column = influences.index(resolved_joint)
+                except ValueError:
+                    raise RuntimeError(
+                        "Target joint was not found in the skinCluster after Add "
+                        "Influence:\n{}".format(resolved_joint)
+                    )
 
-            weights = np.zeros(
-                (len(vertex_ids), len(influences)),
-                dtype=np.float64,
-            )
-            weights[:, int(target_column)] = 1.0
-            adapter.set_weights(vertex_ids, weights, normalize=False)
-            _validate_component_flood(
-                adapter=adapter,
-                vertex_ids=vertex_ids,
-                target_joint=resolved_joint,
-            )
+                weights = np.zeros(
+                    (len(vertex_ids), len(influences)),
+                    dtype=np.float64,
+                )
+                weights[:, int(target_column)] = 1.0
+                adapter.set_weights(vertex_ids, weights, normalize=False)
+                mutation_recorded = True
+                _validate_component_flood(
+                    adapter=adapter,
+                    vertex_ids=vertex_ids,
+                    target_joint=resolved_joint,
+                )
+        except Exception:
+            if mutation_recorded:
+                _undo_failed_flood()
+            raise
     finally:
         _restore_selection(selection_before)
 
@@ -183,6 +191,16 @@ def _validate_component_flood(
                 "Component Flood left non-target weights on selected vertices. "
                 "First vertex IDs: {}".format(bad_vertex_ids)
             )
+
+
+def _undo_failed_flood() -> None:
+    try:
+        cmds.undo()
+    except Exception:
+        cmds.warning(
+            "Component Flood failed after modifying the skinCluster, and the "
+            "automatic rollback also failed. Use Maya Undo before continuing."
+        )
 
 
 def _restore_selection(selection_before) -> None:
