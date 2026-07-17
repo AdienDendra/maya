@@ -1,6 +1,6 @@
 """Focused first-surface visibility smoke probe for AD Skin Tool v3.
 
-This module deliberately operates on one source influence at a time.  It reads
+This module deliberately operates on one source influence at a time. It reads
 an accepted Stage-1A exact-distance result, inspects only the vertices whose raw
 unique-nearest owner is the selected source influence, and asks one geometric
 question:
@@ -25,8 +25,8 @@ import numpy as np
 from ad_skin_tools.v3.distance_ranking import ExactDistanceRankingResult
 
 
-# Maya documents 1e-6 as the default triangle-intersection tolerance.  It is
-# kept explicit only for this smoke probe so results are reproducible.  This is
+# Maya documents 1e-6 as the default triangle-intersection tolerance. It is
+# kept explicit only for this smoke probe so results are reproducible. This is
 # not accepted as a production ownership parameter.
 SMOKE_INTERSECTION_TOLERANCE = 1.0e-6
 
@@ -256,20 +256,17 @@ def _candidate_reaches_target_patch_first(
     )
     maximum_parameter = math.nextafter(distance, math.inf)
 
-    try:
-        hit = mesh_fn.closestIntersection(
-            ray_source,
-            ray_direction,
-            om.MSpace.kWorld,
-            maximum_parameter,
-            False,
-            tolerance=SMOKE_INTERSECTION_TOLERANCE,
-        )
-    except RuntimeError:
+    hit = mesh_fn.closestIntersection(
+        ray_source,
+        ray_direction,
+        om.MSpace.kWorld,
+        maximum_parameter,
+        False,
+        tolerance=SMOKE_INTERSECTION_TOLERANCE,
+    )
+    if hit is None:
         return False
 
-    if not hit:
-        return False
     hit_face_id = int(hit[2])
     return hit_face_id in target_face_ids
 
