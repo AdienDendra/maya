@@ -3,9 +3,21 @@ set -euo pipefail
 
 REPO="$HOME/dev/dcc/maya/ad-skin-tools"
 
+# Resolve the Windows host account dynamically so the same checkout can deploy
+# from different PCs/laptops. The `|| true` is required because this script uses
+# `set -euo pipefail`; without it, an unavailable cmd.exe would terminate the
+# script before the fallback can run.
+WIN_USER="$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r' || true)"
+
+if [ -z "$WIN_USER" ]; then
+    echo "Warning: Unable to detect the Windows username. Using fallback 'Arzio'."
+    WIN_USER="Arzio"
+fi
+
+WINDOWS_MAYA_DIR="/mnt/c/Users/$WIN_USER/Documents/maya"
 PACKAGE_SRC="$REPO/ad_skin_tools"
-PACKAGE_DST="/mnt/c/Users/Arzio/Documents/maya/2023/scripts/ad_skin_tools"
-SCRIPT_DST_DIR="/mnt/c/Users/Arzio/Documents/maya/2023/scripts"
+PACKAGE_DST="$WINDOWS_MAYA_DIR/2023/scripts/ad_skin_tools"
+SCRIPT_DST_DIR="$WINDOWS_MAYA_DIR/2023/scripts"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -14,6 +26,7 @@ echo "Deploying AD Skin Tools..."
 echo "Repository:     $REPO"
 echo "Git branch:     ${CURRENT_BRANCH:-<unknown>}"
 echo "Git commit:     ${CURRENT_COMMIT:-<unknown>}"
+echo "Windows user:   $WIN_USER"
 echo "Package from:   $PACKAGE_SRC"
 echo "Package to:     $PACKAGE_DST"
 
@@ -84,7 +97,7 @@ fi
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
-find /mnt/c/Users/Arzio/Documents/maya \
+find "$WINDOWS_MAYA_DIR" \
     -type d \
     -name ad_skin_tools \
     -path '*/scripts/ad_skin_tools' \
