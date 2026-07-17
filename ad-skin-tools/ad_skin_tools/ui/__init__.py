@@ -1,12 +1,13 @@
 """UI package for AD Skin Tools.
 
-Compose v4.1 at package load time and after direct ``tool_window`` reloads.
+Compose v4.1 at package load time, after direct ``tool_window`` reloads, and
+immediately before every window build.
 
-Some legacy Maya shelf commands import ``ad_skin_tools.ui.tool_window``, call
-``importlib.reload(tool_window)``, and then invoke ``tool_window.show()``. Reloading
-that base module restores its old v2.7 builders unless the v4.1 composition is
-installed again afterwards. A small import hook below wraps only that one module's
-loader and reapplies the current cross-version UI after every reload.
+Maya shelf commands are not consistent: some reload only ``tool_window`` while
+others also reload ``component_flood_section`` before calling ``tool_window.show``.
+A reload of either module can restore an older builder function while the window
+still reports v4.1. The reload hook repairs ``tool_window`` reloads, and the show
+guard below is the final authority that recomposes the latest UI at open time.
 """
 
 import importlib.abc
@@ -20,14 +21,16 @@ from ad_skin_tools.ui import tool_window
 
 _TOOL_WINDOW_MODULE = "ad_skin_tools.ui.tool_window"
 _RELOAD_FINDER_MARKER = "_ad_skin_v41_tool_window_reload_finder"
+_SHOW_GUARD_MARKER = "_ad_skin_v41_show_guard"
+_SHOW_GUARD_ORIGINAL = "_ad_skin_v41_original_show"
 
 
 def _compose_v41(tool_window_module) -> None:
-    """Install the current v4.1 builders against a freshly loaded base module."""
+    """Install the current v4.1 builders against the supplied base module."""
 
     # ``importlib.reload`` reuses the existing module dictionary, so dynamically
     # added flags can survive even though the original base functions were restored.
-    # Remove them before installation and let the actual composition rebuild state.
+    # Remove them before installation and let the current composition rebuild state.
     for flag_name in (
         "_V4_COMPONENT_FLOOD_INSTALLED",
         "_V41_INFLUENCE_LOCKS_INSTALLED",
@@ -41,8 +44,28 @@ def _compose_v41(tool_window_module) -> None:
     component_flood_section.install(tool_window_module)
 
 
+def _install_show_guard(tool_window_module) -> None:
+    """Recompose v4.1 immediately before any entry point builds the window."""
+
+    current_show = tool_window_module.show
+    if getattr(current_show, _SHOW_GUARD_MARKER, False):
+        original_show = getattr(current_show, _SHOW_GUARD_ORIGINAL)
+    else:
+        original_show = current_show
+
+    def show_with_current_v41(*args, **kwargs):
+        # This deliberately runs at call time. It repairs cases where another shelf
+        # script reloaded ``component_flood_section`` after package initialization.
+        _compose_v41(tool_window_module)
+        return original_show(*args, **kwargs)
+
+    setattr(show_with_current_v41, _SHOW_GUARD_MARKER, True)
+    setattr(show_with_current_v41, _SHOW_GUARD_ORIGINAL, original_show)
+    tool_window_module.show = show_with_current_v41
+
+
 class _ToolWindowReloadLoader(importlib.abc.Loader):
-    """Delegate normal loading, then recompose the v4.1 UI."""
+    """Delegate normal loading, then recompose and guard the v4.1 UI."""
 
     def __init__(self, wrapped_loader):
         self._wrapped_loader = wrapped_loader
@@ -56,6 +79,7 @@ class _ToolWindowReloadLoader(importlib.abc.Loader):
     def exec_module(self, module):
         self._wrapped_loader.exec_module(module)
         _compose_v41(module)
+        _install_show_guard(module)
 
 
 class _ToolWindowReloadFinder(importlib.abc.MetaPathFinder):
@@ -92,6 +116,7 @@ def _install_reload_finder() -> None:
 
 _install_reload_finder()
 _compose_v41(tool_window)
+_install_show_guard(tool_window)
 
 
 __all__ = ["tool_window"]
