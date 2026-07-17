@@ -22,6 +22,73 @@ def patch(component_flood_section) -> None:
     component_flood_section._set_joint_lock_states = _set_joint_lock_states
     component_flood_section._render_lock_button = _render_lock_button
     component_flood_section._selected_item_ids = _selected_item_ids
+    component_flood_section._populate_joint_context_menu = (
+        _populate_joint_context_menu
+    )
+    component_flood_section.select_joints_in_scene = select_joints_in_scene
+
+    # The base skin-context builder lives in tool_window.py. Wrap the composed UI
+    # installer so every supported entry point gets the shorter "Load Mesh" label
+    # without duplicating or version-branching the underlying load operation.
+    current_install = component_flood_section.install
+    if getattr(current_install, "_ad_skin_cross_version_wrapper", False):
+        original_install = current_install._ad_skin_original_install
+    else:
+        original_install = current_install
+
+    def install_with_cross_version_labels(tool_window_module):
+        original_install(tool_window_module)
+        tool_window_module._build_skin_cluster_section = (
+            _build_skin_cluster_section
+        )
+
+    install_with_cross_version_labels._ad_skin_cross_version_wrapper = True
+    install_with_cross_version_labels._ad_skin_original_install = original_install
+    component_flood_section.install = install_with_cross_version_labels
+
+
+def _build_skin_cluster_section() -> None:
+    """Build the existing mesh/skin context with a clearer Load Mesh label."""
+
+    from ad_skin_tools.ui import component_flood_section as section
+
+    tool_window = section._TOOL_WINDOW
+    cmds.frameLayout(
+        label="Mesh / Skin Context",
+        collapsable=True,
+        collapse=False,
+        marginWidth=6,
+        marginHeight=6,
+    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+
+    tool_window._label_control_row(
+        "Skin Cluster",
+        lambda: cmds.optionMenu(tool_window.CTRL_SKIN_MENU),
+    )
+    cmds.text(
+        tool_window.CTRL_MESH_LABEL,
+        label="Mesh: <none>",
+        align="left",
+    )
+    cmds.text(
+        tool_window.CTRL_MODE_LABEL,
+        label="Mode: No object loaded",
+        align="left",
+    )
+    cmds.text(
+        tool_window.CTRL_JOINT_LABEL,
+        label="Joints: 0",
+        align="left",
+    )
+
+    tool_window._button_row(
+        [("Load Mesh", lambda *_: tool_window.load_skin_weight())],
+        height=30,
+    )
+
+    cmds.setParent("..")
+    cmds.setParent("..")
 
 
 def _build_joints_section() -> None:
@@ -63,7 +130,7 @@ def _build_joints_section() -> None:
         [
             ("Add Joints To The List", lambda *_: section.add_selected_joints()),
             (
-                "Show Joints In The List",
+                "Select Joints In The List",
                 lambda *_: section.show_selected_joints_in_list(),
             ),
         ],
@@ -72,6 +139,87 @@ def _build_joints_section() -> None:
 
     cmds.setParent("..")
     cmds.setParent("..")
+
+
+def _populate_joint_context_menu(menu, *_):
+    """Build the joint-list context menu, including scene selection."""
+
+    from ad_skin_tools.ui import component_flood_section as section
+
+    cmds.popupMenu(menu, edit=True, deleteAllItems=True)
+    cmds.menuItem(
+        label="Lock Selected",
+        parent=menu,
+        command=lambda *_: section.lock_selected_joints(True),
+    )
+    cmds.menuItem(
+        label="Unlock Selected",
+        parent=menu,
+        command=lambda *_: section.lock_selected_joints(False),
+    )
+    cmds.menuItem(divider=True, parent=menu)
+    cmds.menuItem(
+        label="Lock Inverse Selected",
+        parent=menu,
+        command=lambda *_: section.lock_selected_joints(True, inverse=True),
+    )
+    cmds.menuItem(
+        label="Unlock Inverse Selected",
+        parent=menu,
+        command=lambda *_: section.lock_selected_joints(False, inverse=True),
+    )
+    cmds.menuItem(divider=True, parent=menu)
+    cmds.menuItem(
+        label="Remove Selected",
+        parent=menu,
+        command=lambda *_: section.remove_selected_joints(),
+    )
+    cmds.menuItem(
+        label="Remove All",
+        parent=menu,
+        command=lambda *_: section.remove_all_joints(),
+    )
+    cmds.menuItem(divider=True, parent=menu)
+    cmds.menuItem(
+        label="Select Joints In The Scene",
+        parent=menu,
+        command=lambda *_: select_joints_in_scene(),
+    )
+
+
+def select_joints_in_scene() -> None:
+    """Select the joint rows currently selected in the tool inside Maya."""
+
+    from ad_skin_tools.ui import component_flood_section as section
+
+    tool_window = section._TOOL_WINDOW
+    try:
+        tool_window._require_not_busy()
+        tool_window._require_loaded_mesh()
+
+        selected_joints = section._selected_joint_paths()
+        if not selected_joints:
+            cmds.warning("No joints selected in the list.")
+            return
+
+        existing_joints = []
+        for joint in selected_joints:
+            matches = cmds.ls(joint, long=True, type="joint") or []
+            if matches:
+                existing_joints.append(matches[0])
+
+        if not existing_joints:
+            cmds.warning("Selected list joints no longer exist in the scene.")
+            return
+
+        cmds.select(existing_joints, replace=True)
+        tool_window._info(
+            "Selected {} joint(s) in the Maya scene.".format(
+                len(existing_joints)
+            )
+        )
+    except Exception as exc:
+        tool_window._show_error(exc)
 
 
 def _set_joint_list(joints) -> None:
