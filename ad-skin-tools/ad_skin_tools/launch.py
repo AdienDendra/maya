@@ -2,13 +2,7 @@ import importlib
 
 
 def _install_component_flood(tool_window, component_flood_section):
-    """Install v4 UI composition even after Maya module reloads.
-
-    ``importlib.reload`` re-executes a module in the existing module dictionary,
-    so dynamically-added flags may survive while the original functions have
-    already been restored. Check the actual builder function instead of trusting
-    the cached flag.
-    """
+    """Install the composed v4 UI even after Maya module reloads."""
 
     installed_builder = getattr(
         component_flood_section,
@@ -22,10 +16,14 @@ def _install_component_flood(tool_window, component_flood_section):
     )
 
     if current_builder is not installed_builder:
-        try:
-            delattr(tool_window, "_V4_COMPONENT_FLOOD_INSTALLED")
-        except AttributeError:
-            pass
+        for flag_name in (
+            "_V4_COMPONENT_FLOOD_INSTALLED",
+            "_V41_INFLUENCE_LOCKS_INSTALLED",
+        ):
+            try:
+                delattr(tool_window, flag_name)
+            except AttributeError:
+                pass
 
     component_flood_section.install(tool_window)
 
@@ -44,6 +42,7 @@ def reload_modules():
     import ad_skin_tools.core.joint_surface_solver as joint_surface_solver
     import ad_skin_tools.core.joint_seed_competition as joint_seed_competition
     import ad_skin_tools.core.component_selection as component_selection
+    import ad_skin_tools.core.influence_lock as influence_lock
     import ad_skin_tools.core.component_flood as component_flood
 
     import ad_skin_tools.region.maya_scene as region_maya_scene
@@ -72,6 +71,7 @@ def reload_modules():
         joint_surface_solver,
         joint_seed_competition,
         component_selection,
+        influence_lock,
         component_flood,
         region_maya_scene,
         region_distance_ranking,
@@ -84,8 +84,8 @@ def reload_modules():
     ]:
         importlib.reload(module)
 
-    # Reload the composition module first, then restore the base UI definitions,
-    # and finally install v4 against those fresh definitions.
+    # Reload composition first, restore the base UI second, then install v4.1
+    # against the fresh tool-window functions.
     importlib.reload(component_flood_section)
     importlib.reload(tool_window)
     _install_component_flood(tool_window, component_flood_section)
