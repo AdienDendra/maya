@@ -1,6 +1,35 @@
 import importlib
 
 
+def _install_component_flood(tool_window, component_flood_section):
+    """Install v4 UI composition even after Maya module reloads.
+
+    ``importlib.reload`` re-executes a module in the existing module dictionary,
+    so dynamically-added flags may survive while the original functions have
+    already been restored. Check the actual builder function instead of trusting
+    the cached flag.
+    """
+
+    installed_builder = getattr(
+        component_flood_section,
+        "_build_bind_sections",
+        None,
+    )
+    current_builder = getattr(
+        tool_window,
+        "_build_initial_bind_section",
+        None,
+    )
+
+    if current_builder is not installed_builder:
+        try:
+            delattr(tool_window, "_V4_COMPONENT_FLOOD_INSTALLED")
+        except AttributeError:
+            pass
+
+    component_flood_section.install(tool_window)
+
+
 def reload_modules():
     import ad_skin_tools.core.compat as compat
     import ad_skin_tools.core.undo as undo
@@ -52,10 +81,14 @@ def reload_modules():
         joint_automatic_bind,
         automatic_surface_commands,
         commands,
-        tool_window,
-        component_flood_section,
     ]:
         importlib.reload(module)
+
+    # Reload the composition module first, then restore the base UI definitions,
+    # and finally install v4 against those fresh definitions.
+    importlib.reload(component_flood_section)
+    importlib.reload(tool_window)
+    _install_component_flood(tool_window, component_flood_section)
 
 
 def show(reload=False, auto_refresh=False):
@@ -64,7 +97,7 @@ def show(reload=False, auto_refresh=False):
 
     from ad_skin_tools.ui import component_flood_section, tool_window
 
-    component_flood_section.install(tool_window)
+    _install_component_flood(tool_window, component_flood_section)
     tool_window.show(
         auto_refresh=auto_refresh
     )
