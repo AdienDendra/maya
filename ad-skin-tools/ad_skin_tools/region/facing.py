@@ -1,26 +1,14 @@
-"""Region-local facing probe for AD Skin Tool v3.4.
+"""Region-local surface-facing classification for Region Ownership."""
 
-This stage inherits the exact raw-ownership regions from v3.3. The unique v3.3
-anchor region remains primary. Each other region receives its own exact-nearest
-local anchor, and the incident geometric face normals at those anchors are used
-to determine whether the source joint lies on the interior-facing side of that
-surface patch.
-
-The probe does not merge regions by size, use visibility rays, inspect joint
-hierarchy, assign replacement owners, or write a skinCluster.
-"""
 from dataclasses import dataclass
 from typing import Tuple
-import time
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import numpy as np
 
-from ad_skin_tools.v3.distance_ranking import ExactDistanceRankingResult
-from ad_skin_tools.v3.ownership_connectivity_probe import (
-    OwnershipConnectivityProbeResult,
-)
+from ad_skin_tools.region.connectivity import OwnershipConnectivityResult
+from ad_skin_tools.region.distance_ranking import ExactDistanceRankingResult
 
 
 PRIMARY = "primary"
@@ -33,6 +21,13 @@ _FLOAT64_EPSILON = float(np.finfo(np.float64).eps)
 _DOT_PRODUCT_GAMMA_3 = (3.0 * _FLOAT64_EPSILON) / (
     1.0 - (3.0 * _FLOAT64_EPSILON)
 )
+
+
+@dataclass(frozen=True)
+class FacingMeshContext:
+    mesh_shape: str
+    mesh_fn: object
+    incident_faces: Tuple[Tuple[int, ...], ...]
 
 
 @dataclass(frozen=True)
@@ -66,7 +61,7 @@ class RegionFacingDiagnostic:
 
 
 @dataclass(frozen=True)
-class RegionFacingProbeResult:
+class RegionFacingResult:
     mesh_shape: str
     mesh_transform: str
     influences: Tuple[str, ...]
@@ -81,7 +76,6 @@ class RegionFacingProbeResult:
     co_primary_vertex_ids: Tuple[int, ...]
     detached_vertex_ids: Tuple[int, ...]
     ambiguous_vertex_ids: Tuple[int, ...]
-    elapsed_seconds: float
 
     @property
     def accepted_vertex_ids(self) -> Tuple[int, ...]:
@@ -104,16 +98,33 @@ class RegionFacingProbeResult:
         return len(self.ambiguous_vertex_ids)
 
 
-def probe_region_facing(
+def build_facing_mesh_context(mesh_shape: str) -> FacingMeshContext:
+    selection = om.MSelectionList()
+    selection.add(mesh_shape)
+    dag_path = selection.getDagPath(0)
+    mesh_fn = om.MFnMesh(dag_path)
+
+    incident_faces = [tuple() for _ in range(int(mesh_fn.numVertices))]
+    iterator = om.MItMeshVertex(dag_path)
+    while not iterator.isDone():
+        incident_faces[int(iterator.index())] = tuple(
+            sorted(int(face_id) for face_id in iterator.getConnectedFaces())
+        )
+        iterator.next()
+
+    return FacingMeshContext(
+        mesh_shape=mesh_shape,
+        mesh_fn=mesh_fn,
+        incident_faces=tuple(incident_faces),
+    )
+
+
+def classify_region_facing(
     distance_result: ExactDistanceRankingResult,
-    connectivity_result: OwnershipConnectivityProbeResult,
-) -> RegionFacingProbeResult:
-    """Classify v3.3 regions using exact region-local anchor orientation."""
-
-    started = time.perf_counter()
-    _validate_result_pair(distance_result, connectivity_result)
-
-    mesh_fn, incident_faces = _mesh_context(distance_result.mesh_shape)
+    connectivity_result: OwnershipConnectivityResult,
+    context: FacingMeshContext,
+) -> RegionFacingResult:
+    _validate_inputs(distance_result, connectivity_result, context)
     source_index = connectivity_result.source_influence_index
     source_position = np.asarray(
         distance_result.influence_positions[source_index],
@@ -125,16 +136,15 @@ def probe_region_facing(
     diagnostics = []
     for region_index, region in enumerate(connectivity_result.region_vertex_ids):
         local_anchor_ids = _exact_local_anchor_vertex_ids(
-            distance_result=distance_result,
-            source_position=source_position,
-            region_vertex_ids=region,
+            distance_result,
+            source_position,
+            region,
         )
         observations = _anchor_face_observations(
-            mesh_fn=mesh_fn,
-            incident_faces=incident_faces,
-            vertex_positions=distance_result.vertex_positions,
-            source_position=source_position,
-            anchor_vertex_ids=local_anchor_ids,
+            context,
+            distance_result.vertex_positions,
+            source_position,
+            local_anchor_ids,
         )
 
         if region_index in anchor_region_set:
@@ -153,28 +163,18 @@ def probe_region_facing(
         )
 
     diagnostics_tuple = tuple(diagnostics)
-    primary_indices = tuple(
-        diagnostic.region_index
-        for diagnostic in diagnostics_tuple
-        if diagnostic.classification == PRIMARY
+    primary_indices = _indices_for_classifications(diagnostics_tuple, {PRIMARY})
+    co_primary_indices = _indices_for_classifications(
+        diagnostics_tuple,
+        {CO_PRIMARY},
     )
-    co_primary_indices = tuple(
-        diagnostic.region_index
-        for diagnostic in diagnostics_tuple
-        if diagnostic.classification == CO_PRIMARY
-    )
-    detached_indices = tuple(
-        diagnostic.region_index
-        for diagnostic in diagnostics_tuple
-        if diagnostic.classification == DETACHED
-    )
-    ambiguous_indices = tuple(
-        diagnostic.region_index
-        for diagnostic in diagnostics_tuple
-        if diagnostic.classification in {AMBIGUOUS, AMBIGUOUS_PRIMARY}
+    detached_indices = _indices_for_classifications(diagnostics_tuple, {DETACHED})
+    ambiguous_indices = _indices_for_classifications(
+        diagnostics_tuple,
+        {AMBIGUOUS, AMBIGUOUS_PRIMARY},
     )
 
-    return RegionFacingProbeResult(
+    return RegionFacingResult(
         mesh_shape=distance_result.mesh_shape,
         mesh_transform=distance_result.mesh_transform,
         influences=distance_result.influences,
@@ -185,10 +185,7 @@ def probe_region_facing(
         co_primary_region_indices=co_primary_indices,
         detached_region_indices=detached_indices,
         ambiguous_region_indices=ambiguous_indices,
-        primary_vertex_ids=_vertices_for_regions(
-            diagnostics_tuple,
-            primary_indices,
-        ),
+        primary_vertex_ids=_vertices_for_regions(diagnostics_tuple, primary_indices),
         co_primary_vertex_ids=_vertices_for_regions(
             diagnostics_tuple,
             co_primary_indices,
@@ -201,17 +198,19 @@ def probe_region_facing(
             diagnostics_tuple,
             ambiguous_indices,
         ),
-        elapsed_seconds=time.perf_counter() - started,
     )
 
 
-def select_probe_vertices(
-    result: RegionFacingProbeResult,
+def probe_region_facing(distance_result, connectivity_result):
+    context = build_facing_mesh_context(distance_result.mesh_shape)
+    return classify_region_facing(distance_result, connectivity_result, context)
+
+
+def select_facing_vertices(
+    result: RegionFacingResult,
     category: str = "co_primary",
     region_index: int = -1,
 ) -> None:
-    """Select one v3.4 diagnostic category or exact region in Maya."""
-
     category = str(category).lower()
     if category == "accepted":
         vertex_ids = result.accepted_vertex_ids
@@ -259,10 +258,10 @@ def select_probe_vertices(
 
 
 def _exact_local_anchor_vertex_ids(
-    distance_result: ExactDistanceRankingResult,
-    source_position: np.ndarray,
-    region_vertex_ids: Tuple[int, ...],
-) -> Tuple[int, ...]:
+    distance_result,
+    source_position,
+    region_vertex_ids,
+):
     region_array = np.asarray(region_vertex_ids, dtype=np.int32)
     positions = distance_result.vertex_positions[region_array]
     delta = positions - source_position[np.newaxis, :]
@@ -275,12 +274,11 @@ def _exact_local_anchor_vertex_ids(
 
 
 def _anchor_face_observations(
-    mesh_fn: om.MFnMesh,
-    incident_faces: Tuple[Tuple[int, ...], ...],
-    vertex_positions: np.ndarray,
-    source_position: np.ndarray,
-    anchor_vertex_ids: Tuple[int, ...],
-) -> Tuple[AnchorFaceOrientation, ...]:
+    context,
+    vertex_positions,
+    source_position,
+    anchor_vertex_ids,
+):
     observations = []
     for anchor_vertex_id in anchor_vertex_ids:
         radial = np.asarray(
@@ -288,8 +286,8 @@ def _anchor_face_observations(
             dtype=np.float64,
         ) - source_position
 
-        for face_id in incident_faces[int(anchor_vertex_id)]:
-            normal_value = mesh_fn.getPolygonNormal(
+        for face_id in context.incident_faces[int(anchor_vertex_id)]:
+            normal_value = context.mesh_fn.getPolygonNormal(
                 int(face_id),
                 om.MSpace.kWorld,
             )
@@ -308,16 +306,11 @@ def _anchor_face_observations(
                 )
             )
 
-    observations.sort(
-        key=lambda value: (value.anchor_vertex_id, value.face_id)
-    )
+    observations.sort(key=lambda value: (value.anchor_vertex_id, value.face_id))
     return tuple(observations)
 
 
-def _bounded_dot_sign(
-    first: np.ndarray,
-    second: np.ndarray,
-) -> Tuple[float, float, int]:
+def _bounded_dot_sign(first, second):
     products = np.asarray(first, dtype=np.float64) * np.asarray(
         second,
         dtype=np.float64,
@@ -337,9 +330,7 @@ def _bounded_dot_sign(
     return dot_product, zero_bound, sign
 
 
-def _classify_non_anchor_region(
-    observations: Tuple[AnchorFaceOrientation, ...],
-) -> str:
+def _classify_non_anchor_region(observations):
     if not observations:
         return AMBIGUOUS
 
@@ -351,10 +342,15 @@ def _classify_non_anchor_region(
     return AMBIGUOUS
 
 
-def _vertices_for_regions(
-    diagnostics: Tuple[RegionFacingDiagnostic, ...],
-    region_indices: Tuple[int, ...],
-) -> Tuple[int, ...]:
+def _indices_for_classifications(diagnostics, classifications):
+    return tuple(
+        diagnostic.region_index
+        for diagnostic in diagnostics
+        if diagnostic.classification in classifications
+    )
+
+
+def _vertices_for_regions(diagnostics, region_indices):
     selected = set(int(value) for value in region_indices)
     return tuple(
         sorted(
@@ -366,43 +362,15 @@ def _vertices_for_regions(
     )
 
 
-def _mesh_context(
-    mesh_shape: str,
-) -> Tuple[om.MFnMesh, Tuple[Tuple[int, ...], ...]]:
-    selection = om.MSelectionList()
-    selection.add(mesh_shape)
-    dag_path = selection.getDagPath(0)
-    mesh_fn = om.MFnMesh(dag_path)
-
-    incident_faces = [tuple() for _ in range(int(mesh_fn.numVertices))]
-    iterator = om.MItMeshVertex(dag_path)
-    while not iterator.isDone():
-        incident_faces[int(iterator.index())] = tuple(
-            sorted(int(face_id) for face_id in iterator.getConnectedFaces())
-        )
-        iterator.next()
-    return mesh_fn, tuple(incident_faces)
-
-
-def _validate_result_pair(
-    distance_result: ExactDistanceRankingResult,
-    connectivity_result: OwnershipConnectivityProbeResult,
-) -> None:
+def _validate_inputs(distance_result, connectivity_result, context):
     if connectivity_result.mesh_shape != distance_result.mesh_shape:
-        raise RuntimeError("v3.0 and v3.3 results refer to different meshes.")
+        raise RuntimeError("Distance and connectivity results use different meshes.")
     if connectivity_result.influences != distance_result.influences:
-        raise RuntimeError("v3.0 and v3.3 results use different influence lists.")
-    if (
-        connectivity_result.source_influence_index < 0
-        or connectivity_result.source_influence_index
-        >= len(distance_result.influences)
-    ):
-        raise RuntimeError("The v3.3 source influence index is invalid.")
-    if (
-        distance_result.influences[connectivity_result.source_influence_index]
-        != connectivity_result.source_joint
-    ):
-        raise RuntimeError("The v3.0 and v3.3 source joints do not match.")
+        raise RuntimeError(
+            "Distance and connectivity results use different influence lists."
+        )
+    if context.mesh_shape != distance_result.mesh_shape:
+        raise RuntimeError("Facing context refers to a different mesh.")
 
     flattened = tuple(
         sorted(
@@ -413,5 +381,5 @@ def _validate_result_pair(
     )
     if flattened != tuple(sorted(connectivity_result.raw_vertex_ids)):
         raise RuntimeError(
-            "The v3.3 connected regions do not exactly partition raw ownership."
+            "Connected regions do not exactly partition current ownership."
         )

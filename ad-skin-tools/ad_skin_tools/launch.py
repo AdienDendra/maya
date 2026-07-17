@@ -14,6 +14,13 @@ def reload_modules():
     import ad_skin_tools.core.ownership_solver as ownership_solver
     import ad_skin_tools.core.joint_surface_solver as joint_surface_solver
     import ad_skin_tools.core.joint_seed_competition as joint_seed_competition
+
+    import ad_skin_tools.region.maya_scene as region_maya_scene
+    import ad_skin_tools.region.distance_ranking as region_distance_ranking
+    import ad_skin_tools.region.connectivity as region_connectivity
+    import ad_skin_tools.region.facing as region_facing
+    import ad_skin_tools.region.solver as region_solver
+
     import ad_skin_tools.core.joint_automatic_bind as joint_automatic_bind
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.commands as commands
@@ -32,6 +39,11 @@ def reload_modules():
         segment_solver,
         joint_surface_solver,
         joint_seed_competition,
+        region_maya_scene,
+        region_distance_ranking,
+        region_connectivity,
+        region_facing,
+        region_solver,
         joint_automatic_bind,
         automatic_surface_commands,
         commands,

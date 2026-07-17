@@ -1,27 +1,23 @@
-"""Raw-ownership connectivity smoke probe for AD Skin Tool v3.3.
+"""Exact raw-ownership connectivity for Region Ownership.
 
-The accepted v3.0 exact-distance result remains unchanged. For one selected
-influence, this experiment builds the graph induced only by vertices raw-owned
-by that influence, finds its exact connected regions, and identifies the region
-containing the exact-nearest raw vertex as the primary region.
-
-No visibility ray, vertex normal, joint hierarchy, naming convention, region
-size threshold, replacement owner, or skinCluster write is used.
+For one influence, only mesh edges whose two endpoints are currently owned by
+that influence are retained. The resulting induced graph is partitioned into
+exact connected regions. No distance threshold, region-size rule, or body-part
+rule is used.
 """
 
 from dataclasses import dataclass
 from typing import Tuple
-import time
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import numpy as np
 
-from ad_skin_tools.v3.distance_ranking import ExactDistanceRankingResult
+from ad_skin_tools.region.distance_ranking import ExactDistanceRankingResult
 
 
 @dataclass(frozen=True)
-class OwnershipConnectivityProbeResult:
+class OwnershipConnectivityResult:
     mesh_shape: str
     mesh_transform: str
     influences: Tuple[str, ...]
@@ -35,7 +31,6 @@ class OwnershipConnectivityProbeResult:
     primary_vertex_ids: Tuple[int, ...]
     detached_vertex_ids: Tuple[int, ...]
     ambiguous_anchor_region_vertex_ids: Tuple[int, ...]
-    elapsed_seconds: float
 
     @property
     def raw_vertex_count(self) -> int:
@@ -58,29 +53,67 @@ class OwnershipConnectivityProbeResult:
         return len(self.detached_vertex_ids)
 
 
+def build_vertex_adjacency(mesh_shape: str) -> Tuple[Tuple[int, ...], ...]:
+    selection = om.MSelectionList()
+    selection.add(mesh_shape)
+    dag_path = selection.getDagPath(0)
+    mesh_fn = om.MFnMesh(dag_path)
+    adjacency = [set() for _ in range(int(mesh_fn.numVertices))]
 
-def probe_source_joint_ownership_connectivity(
+    iterator = om.MItMeshEdge(dag_path)
+    while not iterator.isDone():
+        first = int(iterator.vertexId(0))
+        second = int(iterator.vertexId(1))
+        adjacency[first].add(second)
+        adjacency[second].add(first)
+        iterator.next()
+
+    return tuple(tuple(sorted(neighbours)) for neighbours in adjacency)
+
+
+def count_topology_components(adjacency: Tuple[Tuple[int, ...], ...]) -> int:
+    unseen = set(range(len(adjacency)))
+    count = 0
+    while unseen:
+        count += 1
+        seed = min(unseen)
+        unseen.remove(seed)
+        stack = [seed]
+        while stack:
+            vertex_id = stack.pop()
+            for neighbour in adjacency[vertex_id]:
+                if neighbour in unseen:
+                    unseen.remove(neighbour)
+                    stack.append(neighbour)
+    return count
+
+
+def partition_influence_ownership(
     distance_result: ExactDistanceRankingResult,
-    source_joint: str,
-) -> OwnershipConnectivityProbeResult:
-    """Partition one influence's raw v3.0 ownership into connected regions."""
+    owner_indices: np.ndarray,
+    source_influence_index: int,
+    adjacency: Tuple[Tuple[int, ...], ...],
+) -> OwnershipConnectivityResult:
+    source_index = int(source_influence_index)
+    if source_index < 0 or source_index >= distance_result.influence_count:
+        raise IndexError("source_influence_index is outside the influence list.")
 
-    started = time.perf_counter()
-    _validate_scene_state(distance_result)
+    owners = np.asarray(owner_indices, dtype=np.int32)
+    if owners.shape != (distance_result.vertex_count,):
+        raise ValueError("owner_indices must contain one value per mesh vertex.")
+    if len(adjacency) != distance_result.vertex_count:
+        raise ValueError("Mesh adjacency does not match the vertex count.")
 
-    source_path = _resolve_result_joint(distance_result, source_joint)
-    source_index = distance_result.influences.index(source_path)
-    raw_array = np.where(
-        distance_result.nearest_influence_indices == source_index
-    )[0].astype(np.int32)
+    raw_array = np.where(owners == source_index)[0].astype(np.int32)
     raw_vertex_ids = tuple(int(value) for value in raw_array.tolist())
+    source_joint = distance_result.influences[source_index]
 
     if not raw_vertex_ids:
-        return OwnershipConnectivityProbeResult(
+        return OwnershipConnectivityResult(
             mesh_shape=distance_result.mesh_shape,
             mesh_transform=distance_result.mesh_transform,
             influences=distance_result.influences,
-            source_joint=source_path,
+            source_joint=source_joint,
             source_influence_index=source_index,
             raw_vertex_ids=tuple(),
             anchor_vertex_ids=tuple(),
@@ -90,14 +123,9 @@ def probe_source_joint_ownership_connectivity(
             primary_vertex_ids=tuple(),
             detached_vertex_ids=tuple(),
             ambiguous_anchor_region_vertex_ids=tuple(),
-            elapsed_seconds=time.perf_counter() - started,
         )
 
-    regions = _induced_connected_regions(
-        mesh_shape=distance_result.mesh_shape,
-        raw_vertex_ids=raw_vertex_ids,
-    )
-
+    regions = _induced_connected_regions(raw_vertex_ids, adjacency)
     source_position = distance_result.influence_positions[source_index]
     raw_positions = distance_result.vertex_positions[raw_array]
     raw_delta = raw_positions - source_position[np.newaxis, :]
@@ -152,11 +180,11 @@ def probe_source_joint_ownership_connectivity(
         )
     )
 
-    return OwnershipConnectivityProbeResult(
+    return OwnershipConnectivityResult(
         mesh_shape=distance_result.mesh_shape,
         mesh_transform=distance_result.mesh_transform,
         influences=distance_result.influences,
-        source_joint=source_path,
+        source_joint=source_joint,
         source_influence_index=source_index,
         raw_vertex_ids=raw_vertex_ids,
         anchor_vertex_ids=anchor_vertex_ids,
@@ -166,18 +194,29 @@ def probe_source_joint_ownership_connectivity(
         primary_vertex_ids=primary_vertex_ids,
         detached_vertex_ids=detached_vertex_ids,
         ambiguous_anchor_region_vertex_ids=ambiguous_anchor_vertex_ids,
-        elapsed_seconds=time.perf_counter() - started,
     )
 
 
+def probe_source_joint_ownership_connectivity(
+    distance_result: ExactDistanceRankingResult,
+    source_joint: str,
+) -> OwnershipConnectivityResult:
+    source_path = _resolve_result_joint(distance_result, source_joint)
+    source_index = distance_result.influences.index(source_path)
+    adjacency = build_vertex_adjacency(distance_result.mesh_shape)
+    return partition_influence_ownership(
+        distance_result,
+        distance_result.nearest_influence_indices,
+        source_index,
+        adjacency,
+    )
 
-def select_probe_vertices(
-    result: OwnershipConnectivityProbeResult,
+
+def select_connectivity_vertices(
+    result: OwnershipConnectivityResult,
     category: str = "detached",
     region_index: int = -1,
 ) -> None:
-    """Select a diagnostic category or one exact connected region in Maya."""
-
     category = str(category).lower()
     if category == "raw":
         vertex_ids = result.raw_vertex_ids
@@ -201,8 +240,7 @@ def select_probe_vertices(
         vertex_ids = result.region_vertex_ids[region_index]
     else:
         raise ValueError(
-            "category must be raw, anchors, primary, detached, ambiguous, "
-            "or region."
+            "category must be raw, anchors, primary, detached, ambiguous, or region."
         )
 
     components = [
@@ -214,29 +252,11 @@ def select_probe_vertices(
         cmds.select(components, replace=True)
 
 
-
-def _induced_connected_regions(
-    mesh_shape: str,
-    raw_vertex_ids: Tuple[int, ...],
-) -> Tuple[Tuple[int, ...], ...]:
+def _induced_connected_regions(raw_vertex_ids, adjacency):
     raw_set = set(int(value) for value in raw_vertex_ids)
-    adjacency = {vertex_id: [] for vertex_id in raw_set}
-
-    selection = om.MSelectionList()
-    selection.add(mesh_shape)
-    dag_path = selection.getDagPath(0)
-    edge_iterator = om.MItMeshEdge(dag_path)
-
-    while not edge_iterator.isDone():
-        first = int(edge_iterator.vertexId(0))
-        second = int(edge_iterator.vertexId(1))
-        if first in raw_set and second in raw_set:
-            adjacency[first].append(second)
-            adjacency[second].append(first)
-        edge_iterator.next()
-
     unseen = set(raw_set)
     regions = []
+
     while unseen:
         seed = min(unseen)
         unseen.remove(seed)
@@ -246,7 +266,7 @@ def _induced_connected_regions(
         while stack:
             vertex_id = stack.pop()
             region.append(vertex_id)
-            for neighbour in sorted(adjacency[vertex_id], reverse=True):
+            for neighbour in reversed(adjacency[vertex_id]):
                 if neighbour in unseen:
                     unseen.remove(neighbour)
                     stack.append(neighbour)
@@ -257,11 +277,7 @@ def _induced_connected_regions(
     return tuple(regions)
 
 
-
-def _resolve_result_joint(
-    result: ExactDistanceRankingResult,
-    joint: str,
-) -> str:
+def _resolve_result_joint(result, joint):
     matches = cmds.ls(joint, long=True, type="joint") or []
     if not matches:
         raise RuntimeError("Joint does not exist:\n{}".format(joint))
@@ -269,56 +285,6 @@ def _resolve_result_joint(
     path = matches[0]
     if path not in result.influences:
         raise RuntimeError(
-            "Selected joint was not part of the v3.0 distance result:\n{}".format(
-                path
-            )
+            "Selected joint was not part of the distance result:\n{}".format(path)
         )
     return path
-
-
-
-def _current_mesh_vertex_positions(mesh_shape: str) -> np.ndarray:
-    selection = om.MSelectionList()
-    selection.add(mesh_shape)
-    dag_path = selection.getDagPath(0)
-    mesh_fn = om.MFnMesh(dag_path)
-    points = mesh_fn.getPoints(om.MSpace.kWorld)
-
-    positions = np.empty((len(points), 3), dtype=np.float64)
-    for index, point in enumerate(points):
-        positions[index] = (point.x, point.y, point.z)
-    return positions
-
-
-
-def _validate_scene_state(result: ExactDistanceRankingResult) -> None:
-    if not cmds.objExists(result.mesh_shape):
-        raise RuntimeError("The v3.0 distance-result mesh no longer exists.")
-
-    current_positions = _current_mesh_vertex_positions(result.mesh_shape)
-    if not np.array_equal(current_positions, result.vertex_positions):
-        raise RuntimeError(
-            "Mesh vertex positions changed after v3.0. Run the distance test "
-            "again."
-        )
-
-    current_joint_positions = np.empty_like(result.influence_positions)
-    for index, joint in enumerate(result.influences):
-        if not cmds.objExists(joint):
-            raise RuntimeError(
-                "A v3.0 distance-result joint no longer exists:\n{}".format(joint)
-            )
-        current_joint_positions[index] = cmds.xform(
-            joint,
-            query=True,
-            worldSpace=True,
-            translation=True,
-        )
-
-    if not np.array_equal(
-        current_joint_positions,
-        result.influence_positions,
-    ):
-        raise RuntimeError(
-            "Joint positions changed after v3.0. Run the distance test again."
-        )

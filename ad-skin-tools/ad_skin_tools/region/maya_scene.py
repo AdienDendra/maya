@@ -1,8 +1,8 @@
-"""Maya scene reads for the AD Skin Tool v3 pipeline.
+"""Maya scene reads for the AD Skin Tool Region Ownership solver.
 
-This module does not calculate ownership and does not create or edit a
-skinCluster.  It only resolves one polygon mesh, normalizes the supplied joint
-paths, and captures immutable world-space input arrays for later solver stages.
+This module resolves one polygon mesh, normalizes the supplied joint paths, and
+captures immutable world-space input arrays. It does not calculate ownership or
+create a skinCluster.
 """
 
 from dataclasses import dataclass
@@ -15,7 +15,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MayaDistanceInput:
-    """World-space data required by the exact-distance stage."""
+    """World-space data required by exact joint-pivot distance ranking."""
 
     mesh_shape: str
     mesh_transform: str
@@ -32,8 +32,8 @@ def collect_distance_input(
 
     mesh_shape, mesh_transform = _resolve_mesh(mesh)
     influences = _normalize_joint_paths(joints)
-    if not influences:
-        raise RuntimeError("Exact distance ranking requires at least one joint.")
+    if len(influences) < 2:
+        raise RuntimeError("Region ownership requires at least two joints.")
 
     vertex_positions = _mesh_vertex_positions(mesh_shape)
     if vertex_positions.shape[0] == 0:
@@ -47,6 +47,26 @@ def collect_distance_input(
         vertex_positions=vertex_positions,
         influence_positions=influence_positions,
     )
+
+
+def validate_scene_state(scene_input: MayaDistanceInput) -> None:
+    """Reject stale captured data before it is reused for ownership solving."""
+
+    if not cmds.objExists(scene_input.mesh_shape):
+        raise RuntimeError("The captured mesh no longer exists.")
+
+    current_vertices = _mesh_vertex_positions(scene_input.mesh_shape)
+    if not np.array_equal(current_vertices, scene_input.vertex_positions):
+        raise RuntimeError(
+            "Mesh vertex positions changed after Region input capture. "
+            "Run the bind again."
+        )
+
+    current_joints = _joint_world_positions(scene_input.influences)
+    if not np.array_equal(current_joints, scene_input.influence_positions):
+        raise RuntimeError(
+            "Joint positions changed after Region input capture. Run the bind again."
+        )
 
 
 def _resolve_mesh(mesh: str) -> Tuple[str, str]:

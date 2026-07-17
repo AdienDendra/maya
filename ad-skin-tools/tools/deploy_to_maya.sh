@@ -21,6 +21,13 @@ mkdir -p "$(dirname "$PACKAGE_DST")"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
 
 mkdir -p "$SCRIPT_DST_DIR"
+
+# Remove runners from the retired experimental v3 package name.
+rm -f \
+    "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
+    "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
+    "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py"
+
 found_runner=false
 for test_src in "$REPO"/scripts/test_*.py; do
     if [ ! -f "$test_src" ]; then

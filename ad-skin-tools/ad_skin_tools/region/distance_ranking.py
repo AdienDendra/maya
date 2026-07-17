@@ -1,12 +1,8 @@
-"""Stage 1 of AD Skin Tool v3: exact world-space distance ranking.
+"""Exact joint-pivot distance ranking for Region Ownership.
 
-The stage intentionally does only one thing: compare every mesh vertex with
-all supplied joint pivots using squared Euclidean distance.  It does not read
-mesh topology, normals, visibility, or joint hierarchy, and it does not write
-skin weights.
-
-Exact ties remain unresolved.  They are never assigned by selection order,
-joint name, minimum quota, or any other artificial ownership rule.
+Every mesh vertex is compared with every supplied joint pivot using squared
+Euclidean distance. Exact ties remain unresolved and are never broken by joint
+name, selection order, hierarchy, or an ownership quota.
 """
 
 from dataclasses import dataclass
@@ -16,11 +12,9 @@ import time
 
 import numpy as np
 
-from ad_skin_tools.v3.maya_scene import MayaDistanceInput
+from ad_skin_tools.region.maya_scene import MayaDistanceInput
 
 
-# Memory/performance control only.  Changing the chunk size must not change any
-# distance, tie, or unique-nearest result.
 DEFAULT_DISTANCE_CHUNK_SIZE = 16384
 
 
@@ -35,8 +29,6 @@ class DistanceCandidate:
 
 @dataclass(frozen=True)
 class ExactDistanceRankingResult:
-    """Stage-1 result with unresolved exact ties represented by owner ``-1``."""
-
     mesh_shape: str
     mesh_transform: str
     influences: Tuple[str, ...]
@@ -59,26 +51,27 @@ class ExactDistanceRankingResult:
         return int(self.influence_positions.shape[0])
 
 
+@dataclass(frozen=True)
+class ExactDistanceTables:
+    influence_indices: np.ndarray
+    squared_distances: np.ndarray
+
+
 def solve_exact_distance_ranking(
     scene_input: MayaDistanceInput,
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
 ) -> ExactDistanceRankingResult:
-    """Compute exact unique-nearest joints and report every exact tie."""
-
     started = time.perf_counter()
-    vertex_positions = np.asarray(
-        scene_input.vertex_positions,
-        dtype=np.float64,
-    )
+    vertex_positions = np.asarray(scene_input.vertex_positions, dtype=np.float64)
     influence_positions = np.asarray(
         scene_input.influence_positions,
         dtype=np.float64,
     )
     _validate_inputs(
-        vertex_positions=vertex_positions,
-        influence_positions=influence_positions,
-        influences=scene_input.influences,
-        distance_chunk_size=distance_chunk_size,
+        vertex_positions,
+        influence_positions,
+        scene_input.influences,
+        distance_chunk_size,
     )
 
     vertex_count = int(vertex_positions.shape[0])
@@ -88,12 +81,10 @@ def solve_exact_distance_ranking(
 
     for start in range(0, vertex_count, int(distance_chunk_size)):
         stop = min(start + int(distance_chunk_size), vertex_count)
-        chunk = vertex_positions[start:stop]
-        delta = (
-            chunk[:, np.newaxis, :]
-            - influence_positions[np.newaxis, :, :]
+        squared = _squared_distance_block(
+            vertex_positions[start:stop],
+            influence_positions,
         )
-        squared = np.einsum("vji,vji->vj", delta, delta)
         chunk_minimum = np.min(squared, axis=1)
         exact_minimum_mask = squared == chunk_minimum[:, np.newaxis]
         chunk_tie_counts = np.count_nonzero(
@@ -132,10 +123,44 @@ def solve_exact_distance_ranking(
         exact_tie_vertex_ids=exact_tie_vertex_ids,
         unique_assignment_counts=unique_assignment_counts,
         coincident_influence_groups=_coincident_influence_groups(
-            influences=scene_input.influences,
-            influence_positions=influence_positions,
+            scene_input.influences,
+            influence_positions,
         ),
         elapsed_seconds=time.perf_counter() - started,
+    )
+
+
+def build_exact_distance_tables(
+    result: ExactDistanceRankingResult,
+    distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
+) -> ExactDistanceTables:
+    if int(distance_chunk_size) < 1:
+        raise ValueError("distance_chunk_size must be at least 1.")
+
+    vertex_count = result.vertex_count
+    influence_count = result.influence_count
+    ordered_indices = np.empty(
+        (vertex_count, influence_count),
+        dtype=np.int32,
+    )
+    ordered_squared = np.empty(
+        (vertex_count, influence_count),
+        dtype=np.float64,
+    )
+
+    for start in range(0, vertex_count, int(distance_chunk_size)):
+        stop = min(start + int(distance_chunk_size), vertex_count)
+        squared = _squared_distance_block(
+            result.vertex_positions[start:stop],
+            result.influence_positions,
+        )
+        order = np.argsort(squared, axis=1, kind="mergesort").astype(np.int32)
+        ordered_indices[start:stop] = order
+        ordered_squared[start:stop] = np.take_along_axis(squared, order, axis=1)
+
+    return ExactDistanceTables(
+        influence_indices=ordered_indices,
+        squared_distances=ordered_squared,
     )
 
 
@@ -143,8 +168,6 @@ def rank_vertex(
     result: ExactDistanceRankingResult,
     vertex_id: int,
 ) -> Tuple[DistanceCandidate, ...]:
-    """Return the complete exact distance ranking for one mesh vertex."""
-
     vertex_id = int(vertex_id)
     if vertex_id < 0 or vertex_id >= result.vertex_count:
         raise IndexError(
@@ -158,23 +181,17 @@ def rank_vertex(
     delta = result.influence_positions - point[np.newaxis, :]
     squared = np.einsum("ji,ji->j", delta, delta)
     minimum = float(np.min(squared))
-    order = sorted(
-        range(result.influence_count),
-        key=lambda index: (
-            float(squared[index]),
-            result.influences[index],
-        ),
-    )
+    order = np.argsort(squared, kind="mergesort")
 
     return tuple(
         DistanceCandidate(
             influence_index=int(index),
-            influence=result.influences[index],
-            squared_distance=float(squared[index]),
-            distance=math.sqrt(float(squared[index])),
-            is_exact_minimum=bool(float(squared[index]) == minimum),
+            influence=result.influences[int(index)],
+            squared_distance=float(squared[int(index)]),
+            distance=math.sqrt(float(squared[int(index)])),
+            is_exact_minimum=bool(float(squared[int(index)]) == minimum),
         )
-        for index in order
+        for index in order.tolist()
     )
 
 
@@ -182,13 +199,8 @@ def format_vertex_ranking(
     result: ExactDistanceRankingResult,
     vertex_id: int,
 ) -> str:
-    """Create a readable diagnostic report for one vertex."""
-
-    candidates = rank_vertex(result, vertex_id)
-    lines = [
-        "Vertex {} exact joint-distance ranking:".format(int(vertex_id))
-    ]
-    for rank, candidate in enumerate(candidates, start=1):
+    lines = ["Vertex {} exact joint-distance ranking:".format(int(vertex_id))]
+    for rank, candidate in enumerate(rank_vertex(result, vertex_id), start=1):
         marker = " [EXACT MINIMUM]" if candidate.is_exact_minimum else ""
         lines.append(
             "  {:>3}. {} | distance={} | squared={}{}".format(
@@ -202,16 +214,19 @@ def format_vertex_ranking(
     return "\n".join(lines)
 
 
-def _coincident_influence_groups(
-    influences: Tuple[str, ...],
-    influence_positions: np.ndarray,
-) -> Tuple[Tuple[str, ...], ...]:
+def _squared_distance_block(vertex_positions, influence_positions):
+    delta = (
+        vertex_positions[:, np.newaxis, :]
+        - influence_positions[np.newaxis, :, :]
+    )
+    return np.einsum("vji,vji->vj", delta, delta)
+
+
+def _coincident_influence_groups(influences, influence_positions):
     groups = {}
     for index, influence in enumerate(influences):
-        position_key = tuple(
-            float(value) for value in influence_positions[index].tolist()
-        )
-        groups.setdefault(position_key, []).append(influence)
+        key = tuple(float(value) for value in influence_positions[index].tolist())
+        groups.setdefault(key, []).append(influence)
 
     coincident = [
         tuple(sorted(group))
@@ -223,11 +238,11 @@ def _coincident_influence_groups(
 
 
 def _validate_inputs(
-    vertex_positions: np.ndarray,
-    influence_positions: np.ndarray,
-    influences: Tuple[str, ...],
-    distance_chunk_size: int,
-) -> None:
+    vertex_positions,
+    influence_positions,
+    influences,
+    distance_chunk_size,
+):
     if vertex_positions.ndim != 2 or vertex_positions.shape[1] != 3:
         raise ValueError("vertex_positions must have shape (vertex_count, 3).")
     if influence_positions.ndim != 2 or influence_positions.shape[1] != 3:
@@ -237,9 +252,7 @@ def _validate_inputs(
     if influence_positions.shape[0] == 0:
         raise ValueError("influence_positions cannot be empty.")
     if influence_positions.shape[0] != len(influences):
-        raise ValueError(
-            "influence_positions row count must match influence names."
-        )
+        raise ValueError("influence_positions row count must match influence names.")
     if not np.all(np.isfinite(vertex_positions)):
         raise ValueError("vertex_positions contain non-finite values.")
     if not np.all(np.isfinite(influence_positions)):
