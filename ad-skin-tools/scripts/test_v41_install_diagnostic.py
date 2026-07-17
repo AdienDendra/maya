@@ -14,6 +14,7 @@ expected_files = {
     "influence locks": os.path.join(package_dir, "core", "influence_lock.py"),
     "component flood": os.path.join(package_dir, "core", "component_flood.py"),
     "flood UI": os.path.join(package_dir, "ui", "component_flood_section.py"),
+    "Maya 2023 joint tree": os.path.join(package_dir, "ui", "joint_tree_maya2023.py"),
 }
 
 print("\n[AD Skin Tool v4.1 - Install Diagnostic]")
@@ -49,7 +50,7 @@ for path in matching_paths:
 installed = (
     tool_window.WINDOW_LABEL == "AD Skin Weights Tool v4.1"
     and getattr(tool_window._build_joints_section, "__module__", "")
-    == "ad_skin_tools.ui.component_flood_section"
+    == "ad_skin_tools.ui.joint_tree_maya2023"
     and getattr(tool_window._build_initial_bind_section, "__module__", "")
     == "ad_skin_tools.ui.component_flood_section"
     and all(os.path.exists(path) for path in expected_files.values())
