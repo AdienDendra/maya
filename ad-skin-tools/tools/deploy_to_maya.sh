@@ -27,6 +27,7 @@ required_v41_files=(
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/component_flood.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
+    "$PACKAGE_SRC/ui/joint_tree_maya2023.py"
 )
 
 for required_file in "${required_v41_files[@]}"; do
@@ -49,7 +50,8 @@ for relative_path in \
     "core/component_selection.py" \
     "core/influence_lock.py" \
     "core/component_flood.py" \
-    "ui/component_flood_section.py"; do
+    "ui/component_flood_section.py" \
+    "ui/joint_tree_maya2023.py"; do
     if [ ! -f "$PACKAGE_DST/$relative_path" ]; then
         echo "ERROR: v4.1 deployment verification failed: $PACKAGE_DST/$relative_path"
         exit 1
