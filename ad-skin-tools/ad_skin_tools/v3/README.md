@@ -33,9 +33,9 @@ create or modify a skinCluster.
   Production rigs do not universally encode logical deformation chains as DAG
   joint ancestry.
 
-Neither experiment is inherited by v3.3.
+Neither experiment is inherited by v3.3 or v3.4.
 
-## Current smoke stage: v3.3 raw-ownership connectivity
+## Preserved checkpoint: v3.3 raw-ownership connectivity
 
 v3.3 investigates one selected influence at a time:
 
@@ -47,43 +47,76 @@ v3.3 investigates one selected influence at a time:
    region when that anchor region is unique.
 6. Every other connected region is reported as a detached ownership island.
 
-There is no largest-region rule, minimum island size, visibility ray, vertex
-normal, joint hierarchy, replacement owner, or skin-weight write.
+There is no largest-region rule, minimum island size, visibility ray, joint
+hierarchy, replacement owner, or skin-weight write.
 
-If exact-nearest anchor vertices occur in more than one connected region, the
-primary region is underdetermined and v3.3 reports all anchor regions instead of
-choosing one artificially.
+v3.3 successfully isolates disconnected cross-surface ownership, but it also
+reveals that one joint may validly own more than one disconnected surface
+region. A palm can expose upper and lower surface regions that are disconnected
+inside the hard v3.0 ownership mask even though both belong to the same joint.
 
-## v3.3 smoke workflow
+The standalone checkpoint remains available through:
+
+```text
+scripts/test_v33_ownership_connectivity_probe.py
+```
+
+## Current smoke stage: v3.4 region-local facing
+
+v3.4 inherits the exact v3.3 connected regions without changing them.
+
+- The unique v3.3 anchor region remains primary.
+- Every other region receives its own exact-nearest local anchor vertex or
+  vertices.
+- For every face incident to those local anchors, v3.4 compares the geometric
+  world-space face normal with the vector from the source joint to the anchor.
+- A secondary region becomes co-primary only when every local-anchor face
+  observation places the joint on the interior-facing side of the patch.
+- A region remains detached when every observation places the joint on the
+  exterior-facing side.
+- Mixed signs, degenerate observations, and numerically unresolved signs remain
+  ambiguous and are not forced into either category.
+
+The sign test does not use an artistic tolerance. Its unresolved interval is the
+standard floating-point roundoff bound for a three-term `float64` dot product.
+
+v3.4 does not reassign rejected vertices, merge by region size, inspect naming or
+hierarchy, use visibility rays, or write a skinCluster.
+
+## v3.4 smoke workflow
 
 1. Run `scripts/test_v30_distance_ranking.py` with one mesh and the complete
    joint list selected.
 2. Select exactly one influence to inspect.
-3. Run `scripts/test_v33_ownership_connectivity_probe.py`.
+3. Run `scripts/test_v34_region_facing_probe.py`.
 
-The result is stored as:
+The runner recomputes v3.3 connectivity for the selected influence and stores:
 
 ```python
 builtins.AD_SKIN_V33_CONNECTIVITY_RESULT
+builtins.AD_SKIN_V34_REGION_FACING_RESULT
 ```
 
-When the primary region is unambiguous, detached vertices are selected
-automatically. Selection helpers:
+Selection helpers:
 
 ```python
-from ad_skin_tools.v3.ownership_connectivity_probe import select_probe_vertices
+from ad_skin_tools.v3.region_facing_probe import select_probe_vertices
 
 select_probe_vertices(
-    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
-    category="primary",
+    builtins.AD_SKIN_V34_REGION_FACING_RESULT,
+    category="accepted",
 )
 select_probe_vertices(
-    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
+    builtins.AD_SKIN_V34_REGION_FACING_RESULT,
+    category="co_primary",
+)
+select_probe_vertices(
+    builtins.AD_SKIN_V34_REGION_FACING_RESULT,
     category="detached",
 )
 select_probe_vertices(
-    builtins.AD_SKIN_V33_CONNECTIVITY_RESULT,
-    category="anchors",
+    builtins.AD_SKIN_V34_REGION_FACING_RESULT,
+    category="ambiguous",
 )
 ```
 
@@ -91,7 +124,6 @@ select_probe_vertices(
 
 - assigning detached islands to replacement joints;
 - combined-object and multiple-shell policy;
-- normal-facing logic;
 - skeleton-graph competition;
 - final ownership resolution;
 - skinCluster creation or weight writing.
