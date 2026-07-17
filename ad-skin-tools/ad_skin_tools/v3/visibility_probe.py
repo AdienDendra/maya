@@ -1,7 +1,7 @@
-"""Focused first-surface visibility smoke probe for AD Skin Tool v3.
+"""Focused first-surface visibility smoke probe for AD Skin Tool v3.1.
 
 This module deliberately operates on one source influence at a time. It reads
-an accepted Stage-1A exact-distance result, inspects only the vertices whose raw
+an accepted v3.0 exact-distance result, inspects only the vertices whose raw
 unique-nearest owner is the selected source influence, and asks one geometric
 question:
 
@@ -313,7 +313,7 @@ def _resolve_result_joint(
     path = matches[0]
     if path not in result.influences:
         raise RuntimeError(
-            "Selected joint was not part of the Stage-1A result:\n{}".format(path)
+            "Selected joint was not part of the v3.0 result:\n{}".format(path)
         )
     return path
 
@@ -333,17 +333,17 @@ def _resolve_probe_joint(
 
 def _validate_scene_state(result: ExactDistanceRankingResult) -> None:
     if not cmds.objExists(result.mesh_shape):
-        raise RuntimeError("The Stage-1A mesh no longer exists.")
+        raise RuntimeError("The v3.0 mesh no longer exists.")
     current_vertex_count = int(cmds.polyEvaluate(result.mesh_shape, vertex=True))
     if current_vertex_count != result.vertex_count:
         raise RuntimeError(
-            "Mesh vertex count changed after Stage 1A. Run Stage 1A again."
+            "Mesh vertex count changed after v3.0. Run v3.0 again."
         )
 
     current_positions = np.empty_like(result.influence_positions)
     for index, joint in enumerate(result.influences):
         if not cmds.objExists(joint):
-            raise RuntimeError("A Stage-1A joint no longer exists:\n{}".format(joint))
+            raise RuntimeError("A v3.0 joint no longer exists:\n{}".format(joint))
         current_positions[index] = cmds.xform(
             joint,
             query=True,
@@ -352,5 +352,5 @@ def _validate_scene_state(result: ExactDistanceRankingResult) -> None:
         )
     if not np.array_equal(current_positions, result.influence_positions):
         raise RuntimeError(
-            "Joint positions changed after Stage 1A. Run Stage 1A again."
+            "Joint positions changed after v3.0. Run v3.0 again."
         )
