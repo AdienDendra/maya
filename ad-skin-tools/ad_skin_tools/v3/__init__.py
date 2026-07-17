@@ -1,17 +1,18 @@
 """AD Skin Tool v3 experimental pipeline.
 
-Version 3 is intentionally isolated from ``ad_skin_tools.core``.  Each solver
+Version 3 is intentionally isolated from ``ad_skin_tools.core``. Each solver
 stage is introduced and smoke-tested independently before it becomes part of a
 production bind pipeline.
 
-Current stage:
-    1. exact world-space joint-distance ranking.
+Current smoke stage:
+    1A. exact world-space joint-pivot distance ranking.
 """
 
 from ad_skin_tools.v3.distance_ranking import (
     DistanceCandidate,
     ExactDistanceRankingResult,
     format_vertex_ranking,
+    rank_vertex,
     solve_exact_distance_ranking,
 )
 from ad_skin_tools.v3.maya_scene import (
@@ -25,5 +26,6 @@ __all__ = [
     "MayaDistanceInput",
     "collect_distance_input",
     "format_vertex_ranking",
+    "rank_vertex",
     "solve_exact_distance_ranking",
 ]
