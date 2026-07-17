@@ -14,7 +14,7 @@ def bind_object_automatic_surface(
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
     """
-    UI/command boundary for the v2.7 automatic hard-ownership solver.
+    UI/command boundary for the v2.8 universal hard-ownership solver.
 
     The public workflow supplies only one mesh and one complete joint list.
     """
