@@ -14,19 +14,27 @@ if [ -z "$WIN_USER" ]; then
     WIN_USER="Arzio"
 fi
 
+# Maya 2023 remains the default. A second workstation can override this without
+# editing the script, for example:
+#
+#   MAYA_VERSION=2025 bash tools/deploy_to_maya.sh
+#   MAYA_VERSION=2026 bash tools/deploy_to_maya.sh
+MAYA_VERSION="${MAYA_VERSION:-2023}"
 WINDOWS_MAYA_DIR="/mnt/c/Users/$WIN_USER/Documents/maya"
 PACKAGE_SRC="$REPO/ad_skin_tools"
-PACKAGE_DST="$WINDOWS_MAYA_DIR/2023/scripts/ad_skin_tools"
-SCRIPT_DST_DIR="$WINDOWS_MAYA_DIR/2023/scripts"
+PACKAGE_DST="$WINDOWS_MAYA_DIR/$MAYA_VERSION/scripts/ad_skin_tools"
+SCRIPT_DST_DIR="$WINDOWS_MAYA_DIR/$MAYA_VERSION/scripts"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
+
 
 echo "Deploying AD Skin Tools..."
 echo "Repository:     $REPO"
 echo "Git branch:     ${CURRENT_BRANCH:-<unknown>}"
 echo "Git commit:     ${CURRENT_COMMIT:-<unknown>}"
 echo "Windows user:   $WIN_USER"
+echo "Maya version:   $MAYA_VERSION"
 echo "Package from:   $PACKAGE_SRC"
 echo "Package to:     $PACKAGE_DST"
 
@@ -41,6 +49,7 @@ required_v41_files=(
     "$PACKAGE_SRC/core/component_flood.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_tree_maya2023.py"
+    "$PACKAGE_SRC/ui/__init__.py"
 )
 
 for required_file in "${required_v41_files[@]}"; do
@@ -50,6 +59,29 @@ for required_file in "${required_v41_files[@]}"; do
         exit 1
     fi
 done
+
+# Verify that the source checkout contains the current UI revision, not merely the
+# original v4.1 files. This catches a stale local branch before anything is copied.
+grep -Fq '"Select Joints In The List"' \
+    "$PACKAGE_SRC/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: source UI is stale: Select Joints In The List is missing."
+    exit 1
+}
+grep -Fq 'label="Select Joints In The Scene"' \
+    "$PACKAGE_SRC/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: source UI is stale: Select Joints In The Scene is missing."
+    exit 1
+}
+grep -Fq '[("Load Mesh",' \
+    "$PACKAGE_SRC/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: source UI is stale: Load Mesh label is missing."
+    exit 1
+}
+grep -Fq 'class _ToolWindowReloadFinder' \
+    "$PACKAGE_SRC/ui/__init__.py" || {
+    echo "ERROR: source UI is stale: direct-reload self-healing hook is missing."
+    exit 1
+}
 
 rm -rf "$PACKAGE_DST"
 mkdir -p "$(dirname "$PACKAGE_DST")"
@@ -64,12 +96,44 @@ for relative_path in \
     "core/influence_lock.py" \
     "core/component_flood.py" \
     "ui/component_flood_section.py" \
-    "ui/joint_tree_maya2023.py"; do
+    "ui/joint_tree_maya2023.py" \
+    "ui/__init__.py"; do
     if [ ! -f "$PACKAGE_DST/$relative_path" ]; then
         echo "ERROR: v4.1 deployment verification failed: $PACKAGE_DST/$relative_path"
         exit 1
     fi
 done
+
+# Verify the destination content as well. A successful copy must carry the exact
+# labels and reload hook expected by the current branch.
+grep -Fq '"Select Joints In The List"' \
+    "$PACKAGE_DST/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: deployed UI verification failed: new list label is missing."
+    exit 1
+}
+grep -Fq 'label="Select Joints In The Scene"' \
+    "$PACKAGE_DST/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: deployed UI verification failed: scene-selection command is missing."
+    exit 1
+}
+grep -Fq '[("Load Mesh",' \
+    "$PACKAGE_DST/ui/joint_tree_maya2023.py" || {
+    echo "ERROR: deployed UI verification failed: Load Mesh label is missing."
+    exit 1
+}
+grep -Fq 'class _ToolWindowReloadFinder' \
+    "$PACKAGE_DST/ui/__init__.py" || {
+    echo "ERROR: deployed UI verification failed: reload hook is missing."
+    exit 1
+}
+
+cat > "$PACKAGE_DST/.ad_skin_deploy_info" <<EOF
+branch=${CURRENT_BRANCH:-unknown}
+commit=${CURRENT_COMMIT:-unknown}
+windows_user=$WIN_USER
+maya_version=$MAYA_VERSION
+destination=$PACKAGE_DST
+EOF
 
 mkdir -p "$SCRIPT_DST_DIR"
 
@@ -104,7 +168,7 @@ find "$WINDOWS_MAYA_DIR" \
     -print 2>/dev/null || true
 
 echo
-echo "v4.1 deployment verified."
-echo "Restart Maya or purge cached ad_skin_tools modules before reopening the UI."
+echo "v4.1 deployment verified against the current UI revision."
+echo "Deploy marker: $PACKAGE_DST/.ad_skin_deploy_info"
 echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v41_install_diagnostic.py"
 echo "Done."
