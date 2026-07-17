@@ -11,17 +11,22 @@ from ad_skin_tools.ui import component_flood_section, tool_window
 package_dir = os.path.dirname(os.path.abspath(ad_skin_tools.__file__))
 expected_files = {
     "component selection": os.path.join(package_dir, "core", "component_selection.py"),
+    "influence locks": os.path.join(package_dir, "core", "influence_lock.py"),
     "component flood": os.path.join(package_dir, "core", "component_flood.py"),
     "flood UI": os.path.join(package_dir, "ui", "component_flood_section.py"),
 }
 
-print("\n[AD Skin Tool v4.0 - Install Diagnostic]")
+print("\n[AD Skin Tool v4.1 - Install Diagnostic]")
 print("Python:", sys.version)
 print("Package:", ad_skin_tools.__file__)
 print("Launch:", launch.__file__)
 print("Tool window:", tool_window.__file__)
 print("Flood UI:", component_flood_section.__file__)
 print("Window label:", tool_window.WINDOW_LABEL)
+print(
+    "Joint-list builder module:",
+    getattr(tool_window._build_joints_section, "__module__", "<unknown>"),
+)
 print(
     "Initial-bind builder module:",
     getattr(tool_window._build_initial_bind_section, "__module__", "<unknown>"),
@@ -42,16 +47,18 @@ for path in matching_paths:
     print("  {} {}".format(path, marker))
 
 installed = (
-    tool_window.WINDOW_LABEL == "AD Skin Weights Tool v4.0"
+    tool_window.WINDOW_LABEL == "AD Skin Weights Tool v4.1"
+    and getattr(tool_window._build_joints_section, "__module__", "")
+    == "ad_skin_tools.ui.component_flood_section"
     and getattr(tool_window._build_initial_bind_section, "__module__", "")
     == "ad_skin_tools.ui.component_flood_section"
     and all(os.path.exists(path) for path in expected_files.values())
 )
 
-print("v4 UI installed:", installed)
+print("v4.1 UI installed:", installed)
 if not installed:
     raise RuntimeError(
-        "Maya is not using the composed AD Skin Tool v4.0 UI. "
+        "Maya is not using the composed AD Skin Tool v4.1 UI. "
         "Check the active package path and duplicate copies printed above."
     )
 
