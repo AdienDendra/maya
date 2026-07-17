@@ -18,12 +18,17 @@ Each stage is implemented and accepted independently. A later stage may reject
 or constrain candidates from an earlier stage, but it must not silently alter
 the earlier stage's recorded data.
 
-1. **Exact distance ranking** — current stage
-   - Compare each world-space mesh vertex with every supplied joint pivot.
-   - Record unique nearest joints.
-   - Preserve exact ties as unresolved.
-   - Detect joint groups with exactly coincident world positions.
-   - Do not create or edit a skinCluster.
+1. **Exact distance ranking**
+   - **1A. Exact joint-pivot ranking — current smoke stage**
+     - Compare each world-space mesh vertex with every supplied joint pivot.
+     - Record unique nearest joints.
+     - Preserve exact ties as unresolved.
+     - Detect joint groups with exactly coincident world positions.
+     - Do not create or edit a skinCluster.
+   - **1B. Native Closest Distance primitive audit — not implemented**
+     - Compare stage 1A against Maya `bindMethod=0`.
+     - Determine the exact contribution of each joint's outgoing bone segment.
+     - Do not assume that pivot distance alone reproduces Maya.
 
 2. **Topology-component validation** — not implemented
 
@@ -35,7 +40,7 @@ the earlier stage's recorded data.
 
 6. **Deterministic owner resolution** — not implemented
 
-## Stage-1 smoke test
+## Stage-1A smoke test
 
 Run `scripts/test_v30_distance_ranking.py` in Maya after selecting exactly one
 polygon mesh and every joint to evaluate. The result is stored as:
@@ -51,6 +56,6 @@ from ad_skin_tools.v3.distance_ranking import format_vertex_ranking
 print(format_vertex_ranking(builtins.AD_SKIN_V30_DISTANCE_RESULT, 0))
 ```
 
-Stage 1 deliberately reports exact ties and zero-region joints. It does not
-attempt to fix them; those observations are input to the later validation and
-skeleton-graph stages.
+Stage 1A deliberately reports exact ties and zero-region joints. It does not
+attempt to fix them and is not yet a clone of Maya Closest Distance. The report
+provides the reference data needed by stage 1B and the later validation stages.
