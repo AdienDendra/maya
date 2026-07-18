@@ -188,11 +188,7 @@ def set_joint_list(joints) -> None:
         _render_lock_button(item_id, joint)
 
         if joint in previous_selected_paths:
-            cmds.treeView(
-                control,
-                edit=True,
-                selectItem=(item_id, True),
-            )
+            _set_tree_item_selected(control, item_id, True)
 
 
 def add_selected_joints() -> None:
@@ -448,16 +444,19 @@ def select_joint_paths(joints) -> None:
     if not cmds.treeView(control, exists=True):
         return
 
-    cmds.treeView(control, edit=True, clearSelection=True)
     path_to_item = _TOOL_WINDOW._STATE.get("joint_path_to_item", {})
-    for joint in joints:
-        item_id = path_to_item.get(joint)
-        if item_id and _tree_item_exists(control, item_id):
-            cmds.treeView(
-                control,
-                edit=True,
-                selectItem=(item_id, True),
-            )
+    item_ids = [
+        path_to_item[joint]
+        for joint in joints
+        if (
+            joint in path_to_item
+            and _tree_item_exists(control, path_to_item[joint])
+        )
+    ]
+
+    cmds.treeView(control, edit=True, clearSelection=True)
+    for item_id in item_ids:
+        _set_tree_item_selected(control, item_id, True)
 
 
 def joint_is_locked(joint: str) -> bool:
@@ -563,11 +562,7 @@ def _prepare_context_menu(clicked_item) -> bool:
         selected_ids = set(_selected_item_ids())
         if clicked_item not in selected_ids:
             cmds.treeView(control, edit=True, clearSelection=True)
-            cmds.treeView(
-                control,
-                edit=True,
-                selectItem=(clicked_item, True),
-            )
+            _set_tree_item_selected(control, clicked_item, True)
     return True
 
 
@@ -610,6 +605,16 @@ def _populate_joint_context_menu(menu, *_):
         label="Select Joints In The Scene",
         parent=menu,
         command=lambda *_: select_joints_in_scene(),
+    )
+
+
+def _set_tree_item_selected(control: str, item_id: str, selected: bool) -> None:
+    """Set one row state without replacing other selected tree rows."""
+
+    cmds.treeView(
+        control,
+        edit=True,
+        select=(item_id, 1 if selected else 0),
     )
 
 
