@@ -38,8 +38,12 @@ PACKAGE_SRC="$REPO/ad_skin_tools"
 WINDOWS_DOCUMENTS="$WINDOWS_PROFILE/Documents"
 SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
-DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
-DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
+
+ADD_INFLUENCE_DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
+ADD_INFLUENCE_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
+
+V60_DIFFUSION_DIAGNOSTIC_SRC="$REPO/scripts/test_v60_bind_smoothing_diffusion.py"
+V60_DIFFUSION_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v60_bind_smoothing_diffusion.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -65,6 +69,8 @@ if [ ! -d "$WINDOWS_DOCUMENTS" ]; then
 fi
 
 required_files=(
+    "$PACKAGE_SRC/bind_smoothing/__init__.py"
+    "$PACKAGE_SRC/bind_smoothing/diffusion.py"
     "$PACKAGE_SRC/core/add_influence.py"
     "$PACKAGE_SRC/core/automatic_surface_commands.py"
     "$PACKAGE_SRC/core/component_flood.py"
@@ -86,8 +92,15 @@ for required_file in "${required_files[@]}"; do
     fi
 done
 
-if [ ! -f "$DIAGNOSTIC_SRC" ]; then
-    echo "ERROR: Add Influence diagnostic is missing: $DIAGNOSTIC_SRC"
+if [ ! -f "$ADD_INFLUENCE_DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: Add Influence diagnostic is missing:"
+    echo "       $ADD_INFLUENCE_DIAGNOSTIC_SRC"
+    exit 1
+fi
+
+if [ ! -f "$V60_DIFFUSION_DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: v6.0 Bind Smoothing diagnostic is missing:"
+    echo "       $V60_DIFFUSION_DIAGNOSTIC_SRC"
     exit 1
 fi
 
@@ -106,9 +119,11 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v41_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v42_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
-    "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py"
+    "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py" \
+    "$V60_DIFFUSION_DIAGNOSTIC_DST"
 
-cp "$DIAGNOSTIC_SRC" "$DIAGNOSTIC_DST"
+cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
+cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -120,5 +135,6 @@ find "$WINDOWS_DOCUMENTS/maya" \
 
 echo
 echo "Active AD Skin Tools package deployment verified."
-echo "Diagnostic runner: $DIAGNOSTIC_DST"
+echo "Diagnostic runner: $ADD_INFLUENCE_DIAGNOSTIC_DST"
+echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
 echo "Done."
