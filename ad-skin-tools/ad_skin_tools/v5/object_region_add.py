@@ -254,17 +254,21 @@ def _protected_mask(weights, influences, locked):
 def _write_claims(adapter, claimed):
     influences = tuple(adapter.influences())
     column_by_joint = {joint: index for index, joint in enumerate(influences)}
-    ids = []
-    columns = []
-    for joint, vertex_ids in claimed.items():
-        for vertex_id in vertex_ids:
-            ids.append(vertex_id)
-            columns.append(column_by_joint[joint])
-    if not ids:
+    assignments = sorted(
+        (
+            (int(vertex_id), int(column_by_joint[joint]))
+            for joint, vertex_ids in claimed.items()
+            for vertex_id in vertex_ids
+        ),
+        key=lambda item: item[0],
+    )
+    if not assignments:
         return
 
-    ids = np.asarray(ids, dtype=np.int32)
-    columns = np.asarray(columns, dtype=np.int32)
+    # Maya may store component elements in ascending index order. Keep the weight
+    # rows in that same order so multiple target regions cannot become shuffled.
+    ids = np.asarray([item[0] for item in assignments], dtype=np.int32)
+    columns = np.asarray([item[1] for item in assignments], dtype=np.int32)
     weights = np.zeros((len(ids), len(influences)), dtype=np.float64)
     weights[np.arange(len(ids), dtype=np.int32), columns] = 1.0
     adapter.set_weights(ids, weights, normalize=False)
