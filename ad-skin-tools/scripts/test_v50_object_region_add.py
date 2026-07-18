@@ -2,7 +2,7 @@
 
 Workflow:
     1. Load an already-skinned mesh in the AD Skin Tool.
-    2. Add one or two new joints to the UI joint list.
+    2. Add one or more new joints to the UI joint list.
     3. Highlight those pending joint rows in the UI list.
     4. Execute this file in Maya's Script Editor.
 
@@ -43,14 +43,13 @@ def _loaded_mesh_and_ui_targets():
     bound = set(state.get("bound_joint_paths", set()))
     pending_targets = [joint for joint in selected_rows if joint not in bound]
 
-    if builtins.len(pending_targets) not in (1, 2):
+    if not pending_targets:
         raise builtins.RuntimeError(
-            "Highlight one or two NEW pending joints in the AD Skin Tool joint "
+            "Highlight at least one NEW pending joint in the AD Skin Tool joint "
             "list.\n\n"
             "Selected UI rows: {}\n"
-            "Selected pending targets: {}".format(
+            "Selected pending targets: 0".format(
                 builtins.len(selected_rows),
-                builtins.len(pending_targets),
             )
         )
 
