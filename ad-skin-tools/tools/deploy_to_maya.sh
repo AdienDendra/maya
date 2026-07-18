@@ -104,6 +104,7 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py" \
     "$SCRIPT_DST_DIR/test_v40_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v41_install_diagnostic.py" \
+    "$SCRIPT_DST_DIR/test_v42_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py"
 
