@@ -1,7 +1,7 @@
 """Maya-style Replace 1.0 flood for selected mesh components.
 
 Region Ownership handles the initial full-object bind. Component Flood is an
-explicit artist override on an existing skinCluster. v4.1 respects Maya influence
+explicit artist override on an existing skinCluster. v4.2 respects Maya influence
 locks: a locked target becomes a no-op, and selected vertices carrying weight from
 any other locked influence are preserved.
 """
@@ -217,7 +217,7 @@ def flood_selected_components_to_joint(
 
 
 def print_component_flood_report(result: ComponentFloodResult) -> None:
-    print("\n[AD Skin Tool v4.1 - Component Flood]")
+    print("\n[AD Skin Tool v4.2 - Component Flood]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Target influence:", result.target_joint)
