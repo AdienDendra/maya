@@ -1,10 +1,10 @@
 import importlib
 
 
-def _install_ui(tool_window, component_flood_section):
-    """Install the single-source v4.2 UI implementation."""
+def _install_ui(tool_window, v5_section):
+    """Install the compact v5 UI implementation."""
 
-    component_flood_section.install(tool_window)
+    v5_section.install(tool_window)
 
 
 def reload_modules():
@@ -33,8 +33,11 @@ def reload_modules():
     import ad_skin_tools.core.joint_automatic_bind as joint_automatic_bind
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.commands as commands
+    import ad_skin_tools.v5.object_region_add as object_region_add
+    import ad_skin_tools.v5.object_region_rebind as object_region_rebind
     import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.component_flood_section as component_flood_section
+    import ad_skin_tools.ui.v5_section as v5_section
     import ad_skin_tools.ui.tool_window as tool_window
 
     for module in [
@@ -61,22 +64,23 @@ def reload_modules():
         joint_automatic_bind,
         automatic_surface_commands,
         commands,
+        object_region_add,
+        object_region_rebind,
     ]:
         importlib.reload(module)
 
-    # Reload the two authoritative v4.2 UI modules, restore the base window, then
-    # install once. No runtime patching between UI modules is required.
     importlib.reload(joint_list)
     importlib.reload(component_flood_section)
+    importlib.reload(v5_section)
     importlib.reload(tool_window)
-    _install_ui(tool_window, component_flood_section)
+    _install_ui(tool_window, v5_section)
 
 
 def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
-    from ad_skin_tools.ui import component_flood_section, tool_window
+    from ad_skin_tools.ui import tool_window, v5_section
 
-    _install_ui(tool_window, component_flood_section)
+    _install_ui(tool_window, v5_section)
     tool_window.show(auto_refresh=auto_refresh)
