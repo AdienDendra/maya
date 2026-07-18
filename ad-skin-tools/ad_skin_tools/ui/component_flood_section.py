@@ -17,6 +17,15 @@ from ad_skin_tools.ui import joint_list
 CTRL_FLOOD_BUTTON = "adSkin_floodSelectedToJointButton"
 CTRL_FLOOD_STATUS = "adSkin_floodSelectedToJointStatus"
 
+# Compatibility aliases for scripts that imported v4.1 callbacks from this
+# module. They point to the authoritative implementation; no logic is duplicated.
+add_selected_joints = joint_list.add_selected_joints
+show_selected_joints_in_list = joint_list.show_selected_joints_in_list
+select_joints_in_scene = joint_list.select_joints_in_scene
+remove_selected_joints = joint_list.remove_selected_joints
+remove_all_joints = joint_list.remove_all_joints
+lock_selected_joints = joint_list.lock_selected_joints
+
 _TOOL_WINDOW = None
 
 
@@ -32,12 +41,10 @@ def install(tool_window_module) -> None:
     tool_window_module._build_joints_section = joint_list.build_section
     tool_window_module._build_initial_bind_section = _build_bind_sections
     tool_window_module._set_joint_list = joint_list.set_joint_list
-    tool_window_module.add_selected_joints = joint_list.add_selected_joints
-    tool_window_module.remove_selected_joints = joint_list.remove_selected_joints
-    tool_window_module.remove_all_joints = joint_list.remove_all_joints
-    tool_window_module.show_selected_joints_in_list = (
-        joint_list.show_selected_joints_in_list
-    )
+    tool_window_module.add_selected_joints = add_selected_joints
+    tool_window_module.remove_selected_joints = remove_selected_joints
+    tool_window_module.remove_all_joints = remove_all_joints
+    tool_window_module.show_selected_joints_in_list = show_selected_joints_in_list
     tool_window_module._set_bind_busy = _set_bind_busy
     tool_window_module.show_help = show_help
 
