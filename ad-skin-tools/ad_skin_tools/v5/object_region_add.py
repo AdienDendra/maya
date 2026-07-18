@@ -1,4 +1,4 @@
-"""v5 smoke test: add one or two influences by object-level Region claim.
+"""v5 smoke test: add new influences by object-level Region claim.
 
 The mesh must already have hard one-hot skin weights. New joints compete only
 against each vertex's current owner. Locked ownership and rejected regions keep
@@ -66,8 +66,6 @@ def add_object_region_influences(
     adapter = SkinClusterAdapter.from_mesh(mesh_shape)
     existing = tuple(adapter.influences())
     targets = _new_targets(target_joints, existing)
-    if len(targets) > 2:
-        raise RuntimeError("v5.0 smoke test accepts one or two new joints only.")
 
     scene_input = collect_distance_input(mesh_transform, existing + targets)
     distance_result = solve_exact_distance_ranking(scene_input)
@@ -323,7 +321,7 @@ def _new_targets(joints, existing):
             seen.add(path)
             result.append(path)
     if not result:
-        raise RuntimeError("Select one or two joints not already bound to the mesh.")
+        raise RuntimeError("Select at least one joint not already bound to the mesh.")
     return tuple(result)
 
 
