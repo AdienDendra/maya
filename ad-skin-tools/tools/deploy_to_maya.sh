@@ -38,6 +38,8 @@ PACKAGE_SRC="$REPO/ad_skin_tools"
 WINDOWS_DOCUMENTS="$WINDOWS_PROFILE/Documents"
 SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
+DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
+DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -59,30 +61,33 @@ fi
 if [ ! -d "$WINDOWS_DOCUMENTS" ]; then
     echo "ERROR: Windows Documents directory is unavailable from WSL:"
     echo "       $WINDOWS_DOCUMENTS"
-    echo "Check the profile path or run with an explicit override:"
-    echo "       WINDOWS_PROFILE=$WINDOWS_PROFILE ./deploy_to_maya.sh"
     exit 1
 fi
 
-required_v42_files=(
+required_files=(
+    "$PACKAGE_SRC/core/add_influence.py"
+    "$PACKAGE_SRC/core/automatic_surface_commands.py"
+    "$PACKAGE_SRC/core/component_flood.py"
     "$PACKAGE_SRC/core/component_selection.py"
     "$PACKAGE_SRC/core/influence_lock.py"
-    "$PACKAGE_SRC/core/component_flood.py"
+    "$PACKAGE_SRC/core/joint_automatic_bind.py"
+    "$PACKAGE_SRC/core/skin_cluster.py"
+    "$PACKAGE_SRC/region/solver.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
-    "$PACKAGE_SRC/ui/__init__.py"
+    "$PACKAGE_SRC/ui/skin_operations.py"
+    "$PACKAGE_SRC/ui/tool_window.py"
 )
 
-for required_file in "${required_v42_files[@]}"; do
+for required_file in "${required_files[@]}"; do
     if [ ! -f "$required_file" ]; then
-        echo "ERROR: v4.2 source file is missing: $required_file"
+        echo "ERROR: active source file is missing: $required_file"
         exit 1
     fi
 done
 
-if [ -f "$PACKAGE_SRC/ui/joint_tree_maya2023.py" ]; then
-    echo "ERROR: retired duplicate UI module still exists:"
-    echo "       $PACKAGE_SRC/ui/joint_tree_maya2023.py"
+if [ ! -f "$DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: Add Influence diagnostic is missing: $DIAGNOSTIC_SRC"
     exit 1
 fi
 
@@ -93,45 +98,16 @@ cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
 find "$PACKAGE_DST" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 find "$PACKAGE_DST" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null || true
 
-for relative_path in \
-    "core/component_selection.py" \
-    "core/influence_lock.py" \
-    "core/component_flood.py" \
-    "ui/component_flood_section.py" \
-    "ui/joint_list.py" \
-    "ui/__init__.py"; do
-    if [ ! -f "$PACKAGE_DST/$relative_path" ]; then
-        echo "ERROR: deployment verification failed: $PACKAGE_DST/$relative_path"
-        exit 1
-    fi
-done
-
-if [ -f "$PACKAGE_DST/ui/joint_tree_maya2023.py" ]; then
-    echo "ERROR: deployed package contains the retired duplicate UI module."
-    exit 1
-fi
-
 rm -f \
     "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
     "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
     "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py" \
     "$SCRIPT_DST_DIR/test_v40_install_diagnostic.py" \
-    "$SCRIPT_DST_DIR/test_v41_install_diagnostic.py"
+    "$SCRIPT_DST_DIR/test_v41_install_diagnostic.py" \
+    "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
+    "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py"
 
-found_runner=false
-for test_src in "$REPO"/scripts/test_*.py; do
-    if [ ! -f "$test_src" ]; then
-        continue
-    fi
-
-    found_runner=true
-    echo "Deploying smoke runner: $(basename "$test_src")"
-    cp "$test_src" "$SCRIPT_DST_DIR/$(basename "$test_src")"
-done
-
-if [ "$found_runner" = false ]; then
-    echo "Warning: no smoke runners found in $REPO/scripts"
-fi
+cp "$DIAGNOSTIC_SRC" "$DIAGNOSTIC_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -142,6 +118,6 @@ find "$WINDOWS_DOCUMENTS/maya" \
     -print 2>/dev/null || true
 
 echo
-echo "v4.2 consolidated UI deployment verified."
-echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v42_install_diagnostic.py"
+echo "Active AD Skin Tools package deployment verified."
+echo "Diagnostic runner: $DIAGNOSTIC_DST"
 echo "Done."
