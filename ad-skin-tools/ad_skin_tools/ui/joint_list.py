@@ -40,6 +40,7 @@ _UNLOCKED_ICON_CANDIDATES = (
 
 _TOOL_WINDOW = None
 _ICON_CACHE = {}
+_PROGRAMMATIC_MULTI_SELECT = False
 
 
 def configure(tool_window_module) -> None:
@@ -80,6 +81,7 @@ def build_section() -> None:
         preventOverride=True,
         pressCommand=(1, _on_lock_button_pressed),
         contextMenuCommand=_prepare_context_menu,
+        selectCommand=_allow_tree_selection_change,
     )
     cmds.popupMenu(
         CTRL_JOINT_CONTEXT_MENU,
@@ -187,8 +189,7 @@ def set_joint_list(joints) -> None:
 
         _render_lock_button(item_id, joint)
 
-        if joint in previous_selected_paths:
-            _set_tree_item_selected(control, item_id, True)
+    select_joint_paths(previous_selected_paths)
 
 
 def add_selected_joints() -> None:
@@ -440,6 +441,8 @@ def selected_joint_paths():
 def select_joint_paths(joints) -> None:
     """Select the supplied full joint paths in the tree."""
 
+    global _PROGRAMMATIC_MULTI_SELECT
+
     control = _TOOL_WINDOW.CTRL_JOINT_LIST
     if not cmds.treeView(control, exists=True):
         return
@@ -455,8 +458,12 @@ def select_joint_paths(joints) -> None:
     ]
 
     cmds.treeView(control, edit=True, clearSelection=True)
-    for item_id in item_ids:
-        _set_tree_item_selected(control, item_id, True)
+    _PROGRAMMATIC_MULTI_SELECT = True
+    try:
+        for item_id in item_ids:
+            _set_tree_item_selected(control, item_id, True)
+    finally:
+        _PROGRAMMATIC_MULTI_SELECT = False
 
 
 def joint_is_locked(joint: str) -> bool:
@@ -608,13 +615,21 @@ def _populate_joint_context_menu(menu, *_):
     )
 
 
+def _allow_tree_selection_change(_item_id, selected) -> bool:
+    """Keep earlier rows selected during one programmatic multi-select pass."""
+
+    if _PROGRAMMATIC_MULTI_SELECT and not bool(selected):
+        return False
+    return True
+
+
 def _set_tree_item_selected(control: str, item_id: str, selected: bool) -> None:
-    """Set one row state without replacing other selected tree rows."""
+    """Set one row through Maya's native tree selection command."""
 
     cmds.treeView(
         control,
         edit=True,
-        select=(item_id, 1 if selected else 0),
+        selectItem=(item_id, bool(selected)),
     )
 
 
