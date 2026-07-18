@@ -32,20 +32,26 @@ if [ ! -d "$PACKAGE_SRC" ]; then
     exit 1
 fi
 
-required_v41_files=(
+required_v42_files=(
     "$PACKAGE_SRC/core/component_selection.py"
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/component_flood.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
-    "$PACKAGE_SRC/ui/joint_tree_maya2023.py"
+    "$PACKAGE_SRC/ui/joint_list.py"
+    "$PACKAGE_SRC/ui/__init__.py"
 )
 
-for required_file in "${required_v41_files[@]}"; do
+for required_file in "${required_v42_files[@]}"; do
     if [ ! -f "$required_file" ]; then
-        echo "ERROR: v4.1 source file is missing: $required_file"
+        echo "ERROR: v4.2 source file is missing: $required_file"
         exit 1
     fi
 done
+
+if [ -f "$PACKAGE_SRC/ui/joint_tree_maya2023.py" ]; then
+    echo "ERROR: retired duplicate UI module still exists: $PACKAGE_SRC/ui/joint_tree_maya2023.py"
+    exit 1
+fi
 
 rm -rf "$PACKAGE_DST"
 mkdir -p "$(dirname "$PACKAGE_DST")"
@@ -59,12 +65,18 @@ for relative_path in \
     "core/influence_lock.py" \
     "core/component_flood.py" \
     "ui/component_flood_section.py" \
-    "ui/joint_tree_maya2023.py"; do
+    "ui/joint_list.py" \
+    "ui/__init__.py"; do
     if [ ! -f "$PACKAGE_DST/$relative_path" ]; then
         echo "ERROR: deployment verification failed: $PACKAGE_DST/$relative_path"
         exit 1
     fi
 done
+
+if [ -f "$PACKAGE_DST/ui/joint_tree_maya2023.py" ]; then
+    echo "ERROR: deployed package contains the retired duplicate UI module."
+    exit 1
+fi
 
 mkdir -p "$SCRIPT_DST_DIR"
 
@@ -72,7 +84,8 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
     "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
     "$SCRIPT_DST_DIR/test_v34_region_facing_probe.py" \
-    "$SCRIPT_DST_DIR/test_v40_install_diagnostic.py"
+    "$SCRIPT_DST_DIR/test_v40_install_diagnostic.py" \
+    "$SCRIPT_DST_DIR/test_v41_install_diagnostic.py"
 
 found_runner=false
 for test_src in "$REPO"/scripts/test_*.py; do
@@ -98,6 +111,6 @@ find "$WINDOWS_MAYA_DIR" \
     -print 2>/dev/null || true
 
 echo
-echo "v4.1 deployment verified."
-echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v41_install_diagnostic.py"
+echo "v4.2 consolidated UI deployment verified."
+echo "Diagnostic runner: $SCRIPT_DST_DIR/test_v42_install_diagnostic.py"
 echo "Done."
