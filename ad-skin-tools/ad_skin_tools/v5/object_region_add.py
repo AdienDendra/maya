@@ -1,11 +1,14 @@
-"""v5 smoke test: add new influences by object-level Region claim.
+"""v5 smoke test: add influences by donor-region geodesic split.
 
-The mesh must already have hard one-hot skin weights. New joints compete only
-against each vertex's current owner. Locked ownership and rejected regions keep
-their original weights. This module is intentionally separate from v4 Flood.
+The existing hard one-hot ownership is authoritative. Each new joint finds its
+nearest surface vertex, uses that vertex's current owner as the donor, and may
+claim only inside that donor's connected writable region. Donor and targets are
+split by exact shortest-path distance along mesh edges. Locked ownership is
+never part of a writable region.
 """
 
 from dataclasses import dataclass
+import heapq
 from typing import Dict, Sequence, Tuple
 
 import maya.cmds as cmds
@@ -14,15 +17,7 @@ from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.influence_lock import locked_influences
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 from ad_skin_tools.core.undo import undo_chunk
-from ad_skin_tools.region.connectivity import (
-    build_vertex_adjacency,
-    partition_influence_ownership,
-)
-from ad_skin_tools.region.distance_ranking import solve_exact_distance_ranking
-from ad_skin_tools.region.facing import (
-    build_facing_mesh_context,
-    classify_region_facing,
-)
+from ad_skin_tools.region.connectivity import build_vertex_adjacency
 from ad_skin_tools.region.maya_scene import collect_distance_input
 
 
@@ -32,9 +27,10 @@ np = ensure_numpy()
 @dataclass(frozen=True)
 class TargetClaim:
     joint: str
+    donor_joint: str
+    anchor_vertex_ids: Tuple[int, ...]
     candidate_vertex_ids: Tuple[int, ...]
     accepted_vertex_ids: Tuple[int, ...]
-    detached_vertex_ids: Tuple[int, ...]
     ambiguous_vertex_ids: Tuple[int, ...]
 
 
@@ -68,65 +64,34 @@ def add_object_region_influences(
     targets = _new_targets(target_joints, existing)
 
     scene_input = collect_distance_input(mesh_transform, existing + targets)
-    distance_result = solve_exact_distance_ranking(scene_input)
-    vertex_ids = np.arange(distance_result.vertex_count, dtype=np.int32)
+    vertex_positions = np.asarray(scene_input.vertex_positions, dtype=np.float64)
+    influence_positions = np.asarray(scene_input.influence_positions, dtype=np.float64)
+    vertex_ids = np.arange(vertex_positions.shape[0], dtype=np.int32)
 
     before = adapter.get_weights(vertex_ids)
     if tuple(before.influences) != existing:
         raise RuntimeError("skinCluster influence order changed during setup.")
+
     baseline_weights = np.asarray(before.weights, dtype=np.float64).copy()
     baseline_owners = _hard_owner_indices(baseline_weights)
     locked = locked_influences(adapter.skin_cluster, existing)
     protected_mask = _protected_mask(baseline_weights, existing, locked)
-
-    tentative = _tentative_owners(
-        distance_result,
-        baseline_owners,
-        protected_mask,
-        len(existing),
-        len(targets),
-    )
-    final_owners = baseline_owners.copy()
     adjacency = build_vertex_adjacency(mesh_shape)
-    facing_context = build_facing_mesh_context(mesh_shape)
-    diagnostics = []
 
-    for offset, joint in enumerate(targets):
-        target_index = len(existing) + offset
-        connectivity = partition_influence_ownership(
-            distance_result,
-            tentative,
-            target_index,
-            adjacency,
-        )
-        facing = classify_region_facing(
-            distance_result,
-            connectivity,
-            facing_context,
-        )
-        accepted = tuple(int(value) for value in facing.accepted_vertex_ids)
-        if accepted:
-            final_owners[np.asarray(accepted, dtype=np.int32)] = target_index
-        diagnostics.append(
-            TargetClaim(
-                joint=joint,
-                candidate_vertex_ids=tuple(connectivity.raw_vertex_ids),
-                accepted_vertex_ids=accepted,
-                detached_vertex_ids=tuple(facing.detached_vertex_ids),
-                ambiguous_vertex_ids=tuple(facing.ambiguous_vertex_ids),
-            )
-        )
+    claimed, diagnostics = _solve_donor_region_claims(
+        existing=existing,
+        targets=targets,
+        vertex_positions=vertex_positions,
+        influence_positions=influence_positions,
+        baseline_owners=baseline_owners,
+        protected_mask=protected_mask,
+        adjacency=adjacency,
+    )
 
-    claimed = {
-        joint: tuple(
-            np.where(final_owners == (len(existing) + offset))[0]
-            .astype(np.int32)
-            .tolist()
-        )
-        for offset, joint in enumerate(targets)
-    }
-    claimed_ids = tuple(sorted(vertex for ids in claimed.values() for vertex in ids))
-    claimed_mask = np.zeros(distance_result.vertex_count, dtype=bool)
+    claimed_ids = tuple(
+        sorted(vertex_id for ids in claimed.values() for vertex_id in ids)
+    )
+    claimed_mask = np.zeros(vertex_positions.shape[0], dtype=bool)
     if claimed_ids:
         claimed_mask[np.asarray(claimed_ids, dtype=np.int32)] = True
     unchanged_ids = tuple(np.where(~claimed_mask)[0].astype(np.int32).tolist())
@@ -172,12 +137,12 @@ def add_object_region_influences(
         protected_vertex_ids=protected_ids,
         unchanged_vertex_ids=unchanged_ids,
         claimed_vertex_ids_by_joint=claimed,
-        diagnostics=tuple(diagnostics),
+        diagnostics=diagnostics,
     )
 
 
 def print_report(result: ObjectRegionAddResult) -> None:
-    print("\n[AD Skin Tool v5.0 - Object Region Add Smoke Test]")
+    print("\n[AD Skin Tool v5.0 - Donor Region Geodesic Smoke Test]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("New influences:", len(result.target_joints))
@@ -187,37 +152,235 @@ def print_report(result: ObjectRegionAddResult) -> None:
     print("Unchanged vertices:", len(result.unchanged_vertex_ids))
     print("\nPer target:")
     for item in result.diagnostics:
+        donor = item.donor_joint.split("|")[-1] if item.donor_joint else "<none>"
         print(
-            "  {}: candidates={} | accepted={} | detached={} | ambiguous={}".format(
+            "  {}: donor={} | anchors={} | domain={} | accepted={} | ties={}".format(
                 item.joint.split("|")[-1],
+                donor,
+                len(item.anchor_vertex_ids),
                 len(item.candidate_vertex_ids),
                 len(item.accepted_vertex_ids),
-                len(item.detached_vertex_ids),
                 len(item.ambiguous_vertex_ids),
             )
         )
 
 
-def _tentative_owners(result, baseline, protected, existing_count, target_count):
-    baseline_delta = (
-        result.vertex_positions
-        - result.influence_positions[np.asarray(baseline, dtype=np.int32)]
+def _solve_donor_region_claims(
+    existing,
+    targets,
+    vertex_positions,
+    influence_positions,
+    baseline_owners,
+    protected_mask,
+    adjacency,
+):
+    existing_count = len(existing)
+    claimed_lists = {joint: [] for joint in targets}
+    diagnostic_data = {}
+    component_cache = {}
+    groups = {}
+
+    for offset, joint in enumerate(targets):
+        target_index = existing_count + offset
+        target_position = influence_positions[target_index]
+        anchors = _nearest_vertices(
+            tuple(range(vertex_positions.shape[0])),
+            vertex_positions,
+            target_position,
+        )
+
+        anchor_array = np.asarray(anchors, dtype=np.int32)
+        anchor_owners = set(int(value) for value in baseline_owners[anchor_array])
+        anchor_is_protected = bool(np.any(protected_mask[anchor_array]))
+
+        if anchor_is_protected or len(anchor_owners) != 1:
+            diagnostic_data[joint] = {
+                "donor_joint": "",
+                "anchors": anchors,
+                "domain": tuple(),
+                "accepted": tuple(),
+                "ambiguous": anchors,
+            }
+            continue
+
+        donor_index = next(iter(anchor_owners))
+        if donor_index not in component_cache:
+            donor_vertex_ids = tuple(
+                np.where(
+                    (baseline_owners == donor_index) & (~protected_mask)
+                )[0]
+                .astype(np.int32)
+                .tolist()
+            )
+            components = _induced_components(donor_vertex_ids, adjacency)
+            component_by_vertex = {
+                vertex_id: component_index
+                for component_index, component in enumerate(components)
+                for vertex_id in component
+            }
+            component_cache[donor_index] = (components, component_by_vertex)
+
+        components, component_by_vertex = component_cache[donor_index]
+        component_indices = {
+            component_by_vertex[int(vertex_id)] for vertex_id in anchors
+        }
+        if len(component_indices) != 1:
+            diagnostic_data[joint] = {
+                "donor_joint": existing[donor_index],
+                "anchors": anchors,
+                "domain": tuple(),
+                "accepted": tuple(),
+                "ambiguous": anchors,
+            }
+            continue
+
+        component_index = next(iter(component_indices))
+        component = components[component_index]
+        groups.setdefault((donor_index, component_index), []).append(
+            (joint, target_index, anchors)
+        )
+        diagnostic_data[joint] = {
+            "donor_joint": existing[donor_index],
+            "anchors": anchors,
+            "domain": component,
+            "accepted": tuple(),
+            "ambiguous": tuple(),
+        }
+
+    for (donor_index, component_index), target_records in groups.items():
+        component = component_cache[donor_index][0][component_index]
+        component_array = np.asarray(component, dtype=np.int32)
+        donor_anchors = _nearest_vertices(
+            component,
+            vertex_positions,
+            influence_positions[donor_index],
+        )
+        donor_distances = _shortest_path_distances(
+            component,
+            donor_anchors,
+            adjacency,
+            vertex_positions,
+        )[component_array]
+
+        target_distances = []
+        for _, _, anchors in target_records:
+            target_distances.append(
+                _shortest_path_distances(
+                    component,
+                    anchors,
+                    adjacency,
+                    vertex_positions,
+                )[component_array]
+            )
+
+        target_matrix = np.column_stack(target_distances)
+        minimum_target = np.min(target_matrix, axis=1)
+        winner = np.argmin(target_matrix, axis=1).astype(np.int32)
+        unique_winner = (
+            np.count_nonzero(
+                target_matrix == minimum_target[:, np.newaxis],
+                axis=1,
+            )
+            == 1
+        )
+        target_wins = unique_winner & (minimum_target < donor_distances)
+        tied_rows = ~unique_winner
+
+        for local_index, (joint, _, _) in enumerate(target_records):
+            accepted = tuple(
+                int(value)
+                for value in component_array[
+                    target_wins & (winner == local_index)
+                ].tolist()
+            )
+            ambiguous = tuple(
+                int(value)
+                for value in component_array[
+                    tied_rows
+                    & (target_matrix[:, local_index] == minimum_target)
+                ].tolist()
+            )
+            claimed_lists[joint].extend(accepted)
+            diagnostic_data[joint]["accepted"] = accepted
+            diagnostic_data[joint]["ambiguous"] = ambiguous
+
+    claimed = {
+        joint: tuple(sorted(int(value) for value in claimed_lists[joint]))
+        for joint in targets
+    }
+    diagnostics = tuple(
+        TargetClaim(
+            joint=joint,
+            donor_joint=diagnostic_data[joint]["donor_joint"],
+            anchor_vertex_ids=tuple(diagnostic_data[joint]["anchors"]),
+            candidate_vertex_ids=tuple(diagnostic_data[joint]["domain"]),
+            accepted_vertex_ids=tuple(diagnostic_data[joint]["accepted"]),
+            ambiguous_vertex_ids=tuple(diagnostic_data[joint]["ambiguous"]),
+        )
+        for joint in targets
     )
-    baseline_squared = np.einsum("vi,vi->v", baseline_delta, baseline_delta)
+    return claimed, diagnostics
 
-    target_positions = result.influence_positions[
-        existing_count : existing_count + target_count
-    ]
-    delta = result.vertex_positions[:, np.newaxis, :] - target_positions[np.newaxis]
-    squared = np.einsum("vji,vji->vj", delta, delta)
-    minimum = np.min(squared, axis=1)
-    local_owner = np.argmin(squared, axis=1).astype(np.int32)
-    unique = np.count_nonzero(squared == minimum[:, np.newaxis], axis=1) == 1
-    claimable = (~protected) & unique & (minimum < baseline_squared)
 
-    owners = np.asarray(baseline, dtype=np.int32).copy()
-    owners[claimable] = existing_count + local_owner[claimable]
-    return owners
+def _nearest_vertices(vertex_ids, vertex_positions, point):
+    ids = np.asarray(vertex_ids, dtype=np.int32)
+    positions = vertex_positions[ids]
+    delta = positions - point[np.newaxis, :]
+    squared = np.einsum("vi,vi->v", delta, delta)
+    minimum = np.min(squared)
+    return tuple(int(value) for value in ids[squared == minimum].tolist())
+
+
+def _induced_components(vertex_ids, adjacency):
+    unseen = set(int(value) for value in vertex_ids)
+    components = []
+    while unseen:
+        seed = min(unseen)
+        unseen.remove(seed)
+        stack = [seed]
+        component = []
+        while stack:
+            vertex_id = stack.pop()
+            component.append(vertex_id)
+            for neighbour in adjacency[vertex_id]:
+                if neighbour in unseen:
+                    unseen.remove(neighbour)
+                    stack.append(neighbour)
+        components.append(tuple(sorted(component)))
+    components.sort(key=lambda values: values[0])
+    return tuple(components)
+
+
+def _shortest_path_distances(
+    component,
+    anchors,
+    adjacency,
+    vertex_positions,
+):
+    allowed = np.zeros(vertex_positions.shape[0], dtype=bool)
+    allowed[np.asarray(component, dtype=np.int32)] = True
+    distances = np.full(vertex_positions.shape[0], np.inf, dtype=np.float64)
+    queue = []
+
+    for anchor in anchors:
+        distances[int(anchor)] = 0.0
+        heapq.heappush(queue, (0.0, int(anchor)))
+
+    while queue:
+        distance, vertex_id = heapq.heappop(queue)
+        if distance != distances[vertex_id]:
+            continue
+        for neighbour in adjacency[vertex_id]:
+            if not allowed[neighbour]:
+                continue
+            delta = vertex_positions[vertex_id] - vertex_positions[neighbour]
+            edge_length = float(np.sqrt(np.dot(delta, delta)))
+            candidate = distance + edge_length
+            if candidate < distances[neighbour]:
+                distances[neighbour] = candidate
+                heapq.heappush(queue, (candidate, int(neighbour)))
+
+    return distances
 
 
 def _hard_owner_indices(weights):
@@ -265,8 +428,6 @@ def _write_claims(adapter, claimed):
     if not assignments:
         return
 
-    # Maya may store component elements in ascending index order. Keep the weight
-    # rows in that same order so multiple target regions cannot become shuffled.
     ids = np.asarray([item[0] for item in assignments], dtype=np.int32)
     columns = np.asarray([item[1] for item in assignments], dtype=np.int32)
     weights = np.zeros((len(ids), len(influences)), dtype=np.float64)
