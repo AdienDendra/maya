@@ -256,7 +256,6 @@ def show_selected_joints_in_list() -> None:
             cmds.warning("Selected joints were not found in the list.")
             return
 
-        select_joint_paths(matched)
         first_item = _TOOL_WINDOW._STATE["joint_path_to_item"][matched[0]]
         if _tree_item_exists(_TOOL_WINDOW.CTRL_JOINT_LIST, first_item):
             cmds.treeView(
@@ -264,6 +263,7 @@ def show_selected_joints_in_list() -> None:
                 edit=True,
                 showItem=first_item,
             )
+        select_joint_paths(matched)
         _TOOL_WINDOW._info(
             "Found {} selected joint(s) in the list.".format(len(matched))
         )
