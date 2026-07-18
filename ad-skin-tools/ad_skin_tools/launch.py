@@ -1,52 +1,10 @@
 import importlib
 
 
-def _install_component_flood(
-    tool_window,
-    component_flood_section,
-    joint_tree_maya2023,
-):
-    """Install the composed v4.1 UI after Maya module reloads."""
-
-    joint_tree_maya2023.patch(component_flood_section)
-    installed_bind_builder = getattr(
-        component_flood_section,
-        "_build_bind_sections",
-        None,
-    )
-    installed_joint_builder = getattr(
-        component_flood_section,
-        "_build_joints_section",
-        None,
-    )
-    current_bind_builder = getattr(
-        tool_window,
-        "_build_initial_bind_section",
-        None,
-    )
-    current_joint_builder = getattr(
-        tool_window,
-        "_build_joints_section",
-        None,
-    )
-
-    if (
-        current_bind_builder is not installed_bind_builder
-        or current_joint_builder is not installed_joint_builder
-    ):
-        for flag_name in (
-            "_V4_COMPONENT_FLOOD_INSTALLED",
-            "_V41_INFLUENCE_LOCKS_INSTALLED",
-        ):
-            try:
-                delattr(tool_window, flag_name)
-            except AttributeError:
-                pass
+def _install_ui(tool_window, component_flood_section):
+    """Install the single-source v4.2 UI implementation."""
 
     component_flood_section.install(tool_window)
-    tool_window._build_skin_cluster_section = (
-        joint_tree_maya2023._build_skin_cluster_section
-    )
 
 
 def reload_modules():
@@ -75,9 +33,9 @@ def reload_modules():
     import ad_skin_tools.core.joint_automatic_bind as joint_automatic_bind
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.commands as commands
-    import ad_skin_tools.ui.tool_window as tool_window
+    import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.component_flood_section as component_flood_section
-    import ad_skin_tools.ui.joint_tree_maya2023 as joint_tree_maya2023
+    import ad_skin_tools.ui.tool_window as tool_window
 
     for module in [
         compat,
@@ -106,33 +64,19 @@ def reload_modules():
     ]:
         importlib.reload(module)
 
-    # Restore the base UI, reload the two v4.1 composition modules, then install
-    # their current builders exactly once.
+    # Reload the two authoritative v4.2 UI modules, restore the base window, then
+    # install once. No runtime patching between UI modules is required.
+    importlib.reload(joint_list)
     importlib.reload(component_flood_section)
-    importlib.reload(joint_tree_maya2023)
     importlib.reload(tool_window)
-    _install_component_flood(
-        tool_window,
-        component_flood_section,
-        joint_tree_maya2023,
-    )
+    _install_ui(tool_window, component_flood_section)
 
 
 def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
-    from ad_skin_tools.ui import (
-        component_flood_section,
-        joint_tree_maya2023,
-        tool_window,
-    )
+    from ad_skin_tools.ui import component_flood_section, tool_window
 
-    _install_component_flood(
-        tool_window,
-        component_flood_section,
-        joint_tree_maya2023,
-    )
-    tool_window.show(
-        auto_refresh=auto_refresh
-    )
+    _install_ui(tool_window, component_flood_section)
+    tool_window.show(auto_refresh=auto_refresh)
