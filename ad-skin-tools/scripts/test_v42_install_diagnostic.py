@@ -42,6 +42,14 @@ print(
     "Initial-bind builder module:",
     getattr(tool_window._build_initial_bind_section, "__module__", "<unknown>"),
 )
+print(
+    "Compatibility lock alias:",
+    component_flood_section.lock_selected_joints is joint_list.lock_selected_joints,
+)
+print(
+    "Compatibility scene-select alias:",
+    component_flood_section.select_joints_in_scene is joint_list.select_joints_in_scene,
+)
 
 for label, path in expected_files.items():
     print("{} exists: {} -> {}".format(label, os.path.exists(path), path))
@@ -68,6 +76,10 @@ installed = (
     == "ad_skin_tools.ui.joint_list"
     and getattr(tool_window._set_joint_list, "__module__", "")
     == "ad_skin_tools.ui.joint_list"
+    and component_flood_section.lock_selected_joints
+    is joint_list.lock_selected_joints
+    and component_flood_section.select_joints_in_scene
+    is joint_list.select_joints_in_scene
     and all(os.path.exists(path) for path in expected_files.values())
     and not os.path.exists(retired_joint_tree)
 )
