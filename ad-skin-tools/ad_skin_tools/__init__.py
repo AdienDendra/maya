@@ -1,1 +1,3 @@
-__version__ = "0.1.0"
+"""AD Skin Tools for Autodesk Maya."""
+
+__version__ = "5.0.0"
