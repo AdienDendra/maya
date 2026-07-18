@@ -5,52 +5,62 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 MAYA_VERSION="${MAYA_VERSION:-2023}"
 
-# Optional manual override:
-#   WIN_USER=Arzio ./deploy_to_maya.sh
-WIN_USER="${WIN_USER:-}"
+# Optional manual override using a WSL profile path:
+#   WINDOWS_PROFILE=/mnt/c/Users/Arzio ./deploy_to_maya.sh
+WINDOWS_PROFILE="${WINDOWS_PROFILE:-}"
 
-if [ -z "$WIN_USER" ]; then
-    WIN_USER="$(
-        cmd.exe /d /c 'echo %USERNAME%' 2>/dev/null \
+if [ -z "$WINDOWS_PROFILE" ]; then
+    WINDOWS_PROFILE_WINDOWS="$(
+        cmd.exe /d /c 'echo %USERPROFILE%' 2>/dev/null \
             | tr -d '\r\n' \
             || true
     )"
+
+    if [ -z "$WINDOWS_PROFILE_WINDOWS" ] || [ "$WINDOWS_PROFILE_WINDOWS" = "%USERPROFILE%" ]; then
+        echo "ERROR: Unable to detect the Windows profile directory."
+        echo "Run the deployment with an explicit profile path:"
+        echo "       WINDOWS_PROFILE=/mnt/c/Users/<profile> ./deploy_to_maya.sh"
+        exit 1
+    fi
+
+    WINDOWS_PROFILE="$(wslpath -u "$WINDOWS_PROFILE_WINDOWS" 2>/dev/null || true)"
 fi
 
-if [ -z "$WIN_USER" ] || [ "$WIN_USER" = "%USERNAME%" ]; then
-    echo "ERROR: Unable to detect the Windows username."
-    echo "Run the deployment with an explicit username:"
-    echo "       WIN_USER=<WindowsUsername> ./deploy_to_maya.sh"
+if [ -z "$WINDOWS_PROFILE" ] || [ ! -d "$WINDOWS_PROFILE" ]; then
+    echo "ERROR: Windows profile directory is unavailable from WSL:"
+    echo "       ${WINDOWS_PROFILE:-<empty>}"
+    echo "Run with an explicit profile path, for example:"
+    echo "       WINDOWS_PROFILE=/mnt/c/Users/Arzio ./deploy_to_maya.sh"
     exit 1
 fi
 
 PACKAGE_SRC="$REPO/ad_skin_tools"
-SCRIPT_DST_DIR="/mnt/c/Users/$WIN_USER/Documents/maya/$MAYA_VERSION/scripts"
+WINDOWS_DOCUMENTS="$WINDOWS_PROFILE/Documents"
+SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
 echo "Deploying AD Skin Tools..."
-echo "Repository:     $REPO"
-echo "Git branch:     ${CURRENT_BRANCH:-<unknown>}"
-echo "Git commit:     ${CURRENT_COMMIT:-<unknown>}"
-echo "Windows user:   $WIN_USER"
-echo "Maya version:   $MAYA_VERSION"
-echo "Package from:   $PACKAGE_SRC"
-echo "Package to:     $PACKAGE_DST"
+echo "Repository:       $REPO"
+echo "Git branch:       ${CURRENT_BRANCH:-<unknown>}"
+echo "Git commit:       ${CURRENT_COMMIT:-<unknown>}"
+echo "Windows profile:  $WINDOWS_PROFILE"
+echo "Maya version:     $MAYA_VERSION"
+echo "Package from:     $PACKAGE_SRC"
+echo "Package to:       $PACKAGE_DST"
 
 if [ ! -d "$PACKAGE_SRC" ]; then
     echo "ERROR: source package not found: $PACKAGE_SRC"
     exit 1
 fi
 
-WINDOWS_DOCUMENTS="/mnt/c/Users/$WIN_USER/Documents"
 if [ ! -d "$WINDOWS_DOCUMENTS" ]; then
     echo "ERROR: Windows Documents directory is unavailable from WSL:"
     echo "       $WINDOWS_DOCUMENTS"
-    echo "Check the username or run with an explicit override:"
-    echo "       WIN_USER=$WIN_USER ./deploy_to_maya.sh"
+    echo "Check the profile path or run with an explicit override:"
+    echo "       WINDOWS_PROFILE=$WINDOWS_PROFILE ./deploy_to_maya.sh"
     exit 1
 fi
 
@@ -125,7 +135,7 @@ fi
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
-find "/mnt/c/Users/$WIN_USER/Documents/maya" \
+find "$WINDOWS_DOCUMENTS/maya" \
     -type d \
     -name ad_skin_tools \
     -path '*/scripts/ad_skin_tools' \
