@@ -42,8 +42,8 @@ V310D_CLOSED_LOOP_BIND_SRC="$REPO/scripts/test_region_closed_loop_consensus_bind
 V310D_CLOSED_LOOP_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_consensus_bind.py"
 V310J_OPPOSITE_GUARD_BIND_SRC="$REPO/scripts/test_region_closed_loop_opposite_guard_bind.py"
 V310J_OPPOSITE_GUARD_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_opposite_guard_bind.py"
-V310K_AMBIGUOUS_LOOP_BIND_SRC="$REPO/scripts/test_region_ambiguous_loop_neighbour_bind.py"
-V310K_AMBIGUOUS_LOOP_BIND_DST="$SCRIPT_DST_DIR/test_region_ambiguous_loop_neighbour_bind.py"
+V310K_DISTANCE_TIEBREAK_BIND_SRC="$REPO/scripts/test_region_ambiguous_loop_distance_tiebreak_bind.py"
+V310K_DISTANCE_TIEBREAK_BIND_DST="$SCRIPT_DST_DIR/test_region_ambiguous_loop_distance_tiebreak_bind.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -78,7 +78,7 @@ required_files=(
     "$PACKAGE_SRC/region/solver.py"
     "$PACKAGE_SRC/region/closed_loop_consensus.py"
     "$PACKAGE_SRC/region/closed_loop_opposite_guard.py"
-    "$PACKAGE_SRC/region/ambiguous_loop_neighbour.py"
+    "$PACKAGE_SRC/region/ambiguous_loop_distance_tiebreak.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
     "$PACKAGE_SRC/ui/skin_operations.py"
@@ -98,7 +98,7 @@ required_diagnostics=(
     "$V310C_COLOR_FEEDBACK_SRC"
     "$V310D_CLOSED_LOOP_BIND_SRC"
     "$V310J_OPPOSITE_GUARD_BIND_SRC"
-    "$V310K_AMBIGUOUS_LOOP_BIND_SRC"
+    "$V310K_DISTANCE_TIEBREAK_BIND_SRC"
 )
 
 for required_diagnostic in "${required_diagnostics[@]}"; do
@@ -129,18 +129,19 @@ rm -f \
     "$SCRIPT_DST_DIR/test_region_closed_loop_facing_bind.py" \
     "$SCRIPT_DST_DIR/test_region_closed_loop_ambiguous_neighbor_bind.py" \
     "$SCRIPT_DST_DIR/test_region_loop_axis_guarded_bind.py" \
+    "$SCRIPT_DST_DIR/test_region_ambiguous_loop_neighbour_bind.py" \
     "$V60_DIFFUSION_DIAGNOSTIC_DST" \
     "$V310C_COLOR_FEEDBACK_DST" \
     "$V310D_CLOSED_LOOP_BIND_DST" \
     "$V310J_OPPOSITE_GUARD_BIND_DST" \
-    "$V310K_AMBIGUOUS_LOOP_BIND_DST"
+    "$V310K_DISTANCE_TIEBREAK_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
 cp "$V310C_COLOR_FEEDBACK_SRC" "$V310C_COLOR_FEEDBACK_DST"
 cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
 cp "$V310J_OPPOSITE_GUARD_BIND_SRC" "$V310J_OPPOSITE_GUARD_BIND_DST"
-cp "$V310K_AMBIGUOUS_LOOP_BIND_SRC" "$V310K_AMBIGUOUS_LOOP_BIND_DST"
+cp "$V310K_DISTANCE_TIEBREAK_BIND_SRC" "$V310K_DISTANCE_TIEBREAK_BIND_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -157,5 +158,5 @@ echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
 echo "v3.10C Region baseline runner: $V310C_COLOR_FEEDBACK_DST"
 echo "v3.10D closed-loop baseline runner: $V310D_CLOSED_LOOP_BIND_DST"
 echo "v3.10J opposite-guard runner: $V310J_OPPOSITE_GUARD_BIND_DST"
-echo "v3.10K ambiguous loop-neighbour runner: $V310K_AMBIGUOUS_LOOP_BIND_DST"
+echo "v3.10K ambiguous distance tie-break runner: $V310K_DISTANCE_TIEBREAK_BIND_DST"
 echo "Done."
