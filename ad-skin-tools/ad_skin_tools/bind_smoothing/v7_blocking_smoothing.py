@@ -20,8 +20,14 @@ from ad_skin_tools.bind_smoothing.validation import (
     BindWeightValidationResult,
     validate_bind_weights,
 )
-from ad_skin_tools.region import ambiguous_loop_distance_tiebreak
-from ad_skin_tools.region import closed_loop_opposite_guard
+from ad_skin_tools.region.ambiguous_loop_distance_tiebreak import (
+    AmbiguousLoopDistanceResult,
+    solve_ambiguous_loop_distance_tiebreak,
+)
+from ad_skin_tools.region.closed_loop_opposite_guard import (
+    OppositeGuardConsensusResult,
+    solve_closed_loop_opposite_guard,
+)
 from ad_skin_tools.region.connectivity import build_vertex_adjacency
 from ad_skin_tools.region.solver import RegionOwnershipResult
 
@@ -34,8 +40,8 @@ class V7BlockingSmoothingResult:
     blocking_owner_indices: np.ndarray
     options: BindSmoothingOptions
     effective_maximum_influences: int
-    guarded_result: object
-    blocking_result: object
+    guarded_result: OppositeGuardConsensusResult
+    blocking_result: AmbiguousLoopDistanceResult
     diffusion_result: BindDiffusionResult
     distance_projection_result: DistanceMaxInfluenceResult
     owner_maximum_result: OwnerMaximumResult
@@ -58,17 +64,10 @@ def solve_v7_blocking_smoothing(
 
     options = (options or BindSmoothingOptions()).validated()
 
-    guarded_result = (
-        closed_loop_opposite_guard.solve_closed_loop_opposite_guard(
-            region_result
-        )
-    )
-    blocking_result = (
-        ambiguous_loop_distance_tiebreak.
-        solve_ambiguous_loop_distance_tiebreak(
-            region_result,
-            guarded_result,
-        )
+    guarded_result = solve_closed_loop_opposite_guard(region_result)
+    blocking_result = solve_ambiguous_loop_distance_tiebreak(
+        region_result,
+        guarded_result,
     )
     blocking_owners = np.asarray(
         blocking_result.corrected_owner_indices,
@@ -104,8 +103,7 @@ def solve_v7_blocking_smoothing(
             "v7.0 Max Influences has unresolved exact weight-and-distance ties. "
             "First vertex IDs: {}".format(
                 list(
-                    distance_projection.
-                    unresolved_exact_tie_vertex_ids[:20]
+                    distance_projection.unresolved_exact_tie_vertex_ids[:20]
                 )
             )
         )
