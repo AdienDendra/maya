@@ -45,26 +45,11 @@ ADD_INFLUENCE_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
 V60_DIFFUSION_DIAGNOSTIC_SRC="$REPO/scripts/test_v60_bind_smoothing_diffusion.py"
 V60_DIFFUSION_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v60_bind_smoothing_diffusion.py"
 
-V310_BOUNDARY_DIAGNOSTIC_SRC="$REPO/scripts/test_region_boundary_coherence.py"
-V310_BOUNDARY_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_region_boundary_coherence.py"
-
-V310B_BOUNDARY_RING_DIAGNOSTIC_SRC="$REPO/scripts/test_region_boundary_ring_coherence.py"
-V310B_BOUNDARY_RING_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_region_boundary_ring_coherence.py"
-
 V310C_COLOR_FEEDBACK_SRC="$REPO/scripts/test_region_hard_bind_color_feedback.py"
 V310C_COLOR_FEEDBACK_DST="$SCRIPT_DST_DIR/test_region_hard_bind_color_feedback.py"
 
 V310D_CLOSED_LOOP_BIND_SRC="$REPO/scripts/test_region_closed_loop_consensus_bind.py"
 V310D_CLOSED_LOOP_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_consensus_bind.py"
-
-V310E_LOCAL_RUN_BIND_SRC="$REPO/scripts/test_region_local_closed_loop_runs_bind.py"
-V310E_LOCAL_RUN_BIND_DST="$SCRIPT_DST_DIR/test_region_local_closed_loop_runs_bind.py"
-
-V310F_CLOSED_LOOP_FACING_BIND_SRC="$REPO/scripts/test_region_closed_loop_facing_bind.py"
-V310F_CLOSED_LOOP_FACING_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_facing_bind.py"
-
-V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC="$REPO/scripts/test_region_closed_loop_ambiguous_neighbor_bind.py"
-V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_ambiguous_neighbor_bind.py"
 
 V310H_LOOP_AXIS_BIND_SRC="$REPO/scripts/test_region_loop_axis_guarded_bind.py"
 V310H_LOOP_AXIS_BIND_DST="$SCRIPT_DST_DIR/test_region_loop_axis_guarded_bind.py"
@@ -102,14 +87,12 @@ required_files=(
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/joint_automatic_bind.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
-    "$PACKAGE_SRC/region/ambiguous_neighbor_resolution.py"
-    "$PACKAGE_SRC/region/boundary_coherence.py"
-    "$PACKAGE_SRC/region/boundary_ring_coherence.py"
-    "$PACKAGE_SRC/region/closed_loop_consensus.py"
-    "$PACKAGE_SRC/region/closed_loop_facing_resolution.py"
-    "$PACKAGE_SRC/region/local_closed_loop_runs.py"
-    "$PACKAGE_SRC/region/loop_axis_guarded_consensus.py"
+    "$PACKAGE_SRC/region/distance_ranking.py"
+    "$PACKAGE_SRC/region/connectivity.py"
+    "$PACKAGE_SRC/region/facing.py"
     "$PACKAGE_SRC/region/solver.py"
+    "$PACKAGE_SRC/region/closed_loop_consensus.py"
+    "$PACKAGE_SRC/region/loop_axis_guarded_consensus.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
     "$PACKAGE_SRC/ui/skin_operations.py"
@@ -123,65 +106,20 @@ for required_file in "${required_files[@]}"; do
     fi
 done
 
-if [ ! -f "$ADD_INFLUENCE_DIAGNOSTIC_SRC" ]; then
-    echo "ERROR: Add Influence diagnostic is missing:"
-    echo "       $ADD_INFLUENCE_DIAGNOSTIC_SRC"
-    exit 1
-fi
+required_diagnostics=(
+    "$ADD_INFLUENCE_DIAGNOSTIC_SRC"
+    "$V60_DIFFUSION_DIAGNOSTIC_SRC"
+    "$V310C_COLOR_FEEDBACK_SRC"
+    "$V310D_CLOSED_LOOP_BIND_SRC"
+    "$V310H_LOOP_AXIS_BIND_SRC"
+)
 
-if [ ! -f "$V60_DIFFUSION_DIAGNOSTIC_SRC" ]; then
-    echo "ERROR: v6.0 Bind Smoothing diagnostic is missing:"
-    echo "       $V60_DIFFUSION_DIAGNOSTIC_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310_BOUNDARY_DIAGNOSTIC_SRC" ]; then
-    echo "ERROR: v3.10 Region boundary diagnostic is missing:"
-    echo "       $V310_BOUNDARY_DIAGNOSTIC_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310B_BOUNDARY_RING_DIAGNOSTIC_SRC" ]; then
-    echo "ERROR: v3.10B Region boundary-ring diagnostic is missing:"
-    echo "       $V310B_BOUNDARY_RING_DIAGNOSTIC_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310C_COLOR_FEEDBACK_SRC" ]; then
-    echo "ERROR: v3.10C Region color-feedback diagnostic is missing:"
-    echo "       $V310C_COLOR_FEEDBACK_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310D_CLOSED_LOOP_BIND_SRC" ]; then
-    echo "ERROR: v3.10D closed-loop consensus bind is missing:"
-    echo "       $V310D_CLOSED_LOOP_BIND_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310E_LOCAL_RUN_BIND_SRC" ]; then
-    echo "ERROR: v3.10E local-run consensus bind is missing:"
-    echo "       $V310E_LOCAL_RUN_BIND_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310F_CLOSED_LOOP_FACING_BIND_SRC" ]; then
-    echo "ERROR: v3.10F closed-loop facing bind is missing:"
-    echo "       $V310F_CLOSED_LOOP_FACING_BIND_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC" ]; then
-    echo "ERROR: v3.10G ambiguous-neighbour bind is missing:"
-    echo "       $V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC"
-    exit 1
-fi
-
-if [ ! -f "$V310H_LOOP_AXIS_BIND_SRC" ]; then
-    echo "ERROR: v3.10H loop-axis guarded bind is missing:"
-    echo "       $V310H_LOOP_AXIS_BIND_SRC"
-    exit 1
-fi
+for required_diagnostic in "${required_diagnostics[@]}"; do
+    if [ ! -f "$required_diagnostic" ]; then
+        echo "ERROR: diagnostic runner is missing: $required_diagnostic"
+        exit 1
+    fi
+done
 
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
@@ -190,6 +128,7 @@ cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
 find "$PACKAGE_DST" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 find "$PACKAGE_DST" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null || true
 
+# Remove retired diagnostic runners from previous experimental Region passes.
 rm -f \
     "$SCRIPT_DST_DIR/test_v30_distance_ranking.py" \
     "$SCRIPT_DST_DIR/test_v33_ownership_connectivity_probe.py" \
@@ -199,25 +138,20 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v42_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py" \
+    "$SCRIPT_DST_DIR/test_region_boundary_coherence.py" \
+    "$SCRIPT_DST_DIR/test_region_boundary_ring_coherence.py" \
+    "$SCRIPT_DST_DIR/test_region_local_closed_loop_runs_bind.py" \
+    "$SCRIPT_DST_DIR/test_region_closed_loop_facing_bind.py" \
+    "$SCRIPT_DST_DIR/test_region_closed_loop_ambiguous_neighbor_bind.py" \
     "$V60_DIFFUSION_DIAGNOSTIC_DST" \
-    "$V310_BOUNDARY_DIAGNOSTIC_DST" \
-    "$V310B_BOUNDARY_RING_DIAGNOSTIC_DST" \
     "$V310C_COLOR_FEEDBACK_DST" \
     "$V310D_CLOSED_LOOP_BIND_DST" \
-    "$V310E_LOCAL_RUN_BIND_DST" \
-    "$V310F_CLOSED_LOOP_FACING_BIND_DST" \
-    "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST" \
     "$V310H_LOOP_AXIS_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
-cp "$V310_BOUNDARY_DIAGNOSTIC_SRC" "$V310_BOUNDARY_DIAGNOSTIC_DST"
-cp "$V310B_BOUNDARY_RING_DIAGNOSTIC_SRC" "$V310B_BOUNDARY_RING_DIAGNOSTIC_DST"
 cp "$V310C_COLOR_FEEDBACK_SRC" "$V310C_COLOR_FEEDBACK_DST"
 cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
-cp "$V310E_LOCAL_RUN_BIND_SRC" "$V310E_LOCAL_RUN_BIND_DST"
-cp "$V310F_CLOSED_LOOP_FACING_BIND_SRC" "$V310F_CLOSED_LOOP_FACING_BIND_DST"
-cp "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC" "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST"
 cp "$V310H_LOOP_AXIS_BIND_SRC" "$V310H_LOOP_AXIS_BIND_DST"
 
 echo
@@ -232,12 +166,7 @@ echo
 echo "Active AD Skin Tools package deployment verified."
 echo "Diagnostic runner: $ADD_INFLUENCE_DIAGNOSTIC_DST"
 echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
-echo "v3.10 Region smoke runner: $V310_BOUNDARY_DIAGNOSTIC_DST"
-echo "v3.10B Region ring runner: $V310B_BOUNDARY_RING_DIAGNOSTIC_DST"
-echo "v3.10C Region color runner: $V310C_COLOR_FEEDBACK_DST"
-echo "v3.10D closed-loop bind runner: $V310D_CLOSED_LOOP_BIND_DST"
-echo "v3.10E local-run bind runner: $V310E_LOCAL_RUN_BIND_DST"
-echo "v3.10F closed-loop facing runner: $V310F_CLOSED_LOOP_FACING_BIND_DST"
-echo "v3.10G ambiguous-neighbour runner: $V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST"
+echo "v3.10C Region baseline runner: $V310C_COLOR_FEEDBACK_DST"
+echo "v3.10D closed-loop baseline runner: $V310D_CLOSED_LOOP_BIND_DST"
 echo "v3.10H loop-axis guarded runner: $V310H_LOOP_AXIS_BIND_DST"
 echo "Done."
