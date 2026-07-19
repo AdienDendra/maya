@@ -45,6 +45,9 @@ ADD_INFLUENCE_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
 V60_DIFFUSION_DIAGNOSTIC_SRC="$REPO/scripts/test_v60_bind_smoothing_diffusion.py"
 V60_DIFFUSION_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v60_bind_smoothing_diffusion.py"
 
+V310_BOUNDARY_DIAGNOSTIC_SRC="$REPO/scripts/test_region_boundary_coherence.py"
+V310_BOUNDARY_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_region_boundary_coherence.py"
+
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -78,6 +81,7 @@ required_files=(
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/joint_automatic_bind.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
+    "$PACKAGE_SRC/region/boundary_coherence.py"
     "$PACKAGE_SRC/region/solver.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
@@ -104,6 +108,12 @@ if [ ! -f "$V60_DIFFUSION_DIAGNOSTIC_SRC" ]; then
     exit 1
 fi
 
+if [ ! -f "$V310_BOUNDARY_DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: v3.10 Region boundary diagnostic is missing:"
+    echo "       $V310_BOUNDARY_DIAGNOSTIC_SRC"
+    exit 1
+fi
+
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
@@ -120,10 +130,12 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v42_install_diagnostic.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py" \
-    "$V60_DIFFUSION_DIAGNOSTIC_DST"
+    "$V60_DIFFUSION_DIAGNOSTIC_DST" \
+    "$V310_BOUNDARY_DIAGNOSTIC_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
+cp "$V310_BOUNDARY_DIAGNOSTIC_SRC" "$V310_BOUNDARY_DIAGNOSTIC_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -137,4 +149,5 @@ echo
 echo "Active AD Skin Tools package deployment verified."
 echo "Diagnostic runner: $ADD_INFLUENCE_DIAGNOSTIC_DST"
 echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
+echo "v3.10 Region smoke runner: $V310_BOUNDARY_DIAGNOSTIC_DST"
 echo "Done."
