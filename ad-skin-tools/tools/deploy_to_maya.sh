@@ -48,6 +48,9 @@ V60_DIFFUSION_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v60_bind_smoothing_diffusion.
 V61_CONSTRAINT_DIAGNOSTIC_SRC="$REPO/scripts/test_v61_bind_smoothing_constraints.py"
 V61_CONSTRAINT_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v61_bind_smoothing_constraints.py"
 
+V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC="$REPO/scripts/test_v61b_owner_and_ties.py"
+V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v61b_owner_and_ties.py"
+
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -74,6 +77,7 @@ fi
 required_files=(
     "$PACKAGE_SRC/bind_smoothing/__init__.py"
     "$PACKAGE_SRC/bind_smoothing/diffusion.py"
+    "$PACKAGE_SRC/bind_smoothing/final_constraints.py"
     "$PACKAGE_SRC/bind_smoothing/max_influences.py"
     "$PACKAGE_SRC/bind_smoothing/options.py"
     "$PACKAGE_SRC/bind_smoothing/solver.py"
@@ -117,6 +121,12 @@ if [ ! -f "$V61_CONSTRAINT_DIAGNOSTIC_SRC" ]; then
     exit 1
 fi
 
+if [ ! -f "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: v6.1B final-constraint diagnostic is missing:"
+    echo "       $V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC"
+    exit 1
+fi
+
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
@@ -134,11 +144,13 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v50_object_region_add.py" \
     "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py" \
     "$V60_DIFFUSION_DIAGNOSTIC_DST" \
-    "$V61_CONSTRAINT_DIAGNOSTIC_DST"
+    "$V61_CONSTRAINT_DIAGNOSTIC_DST" \
+    "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
 cp "$V61_CONSTRAINT_DIAGNOSTIC_SRC" "$V61_CONSTRAINT_DIAGNOSTIC_DST"
+cp "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC" "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -153,4 +165,5 @@ echo "Active AD Skin Tools package deployment verified."
 echo "Diagnostic runner: $ADD_INFLUENCE_DIAGNOSTIC_DST"
 echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
 echo "v6.1 smoke runner: $V61_CONSTRAINT_DIAGNOSTIC_DST"
+echo "v6.1B smoke runner: $V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
 echo "Done."
