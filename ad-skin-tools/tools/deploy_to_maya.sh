@@ -51,6 +51,9 @@ V61_CONSTRAINT_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v61_bind_smoothing_constrain
 V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC="$REPO/scripts/test_v61b_owner_and_ties.py"
 V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v61b_owner_and_ties.py"
 
+V61C_VISUAL_BIND_DIAGNOSTIC_SRC="$REPO/scripts/test_v61c_bind_skin_color_feedback.py"
+V61C_VISUAL_BIND_DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_v61c_bind_skin_color_feedback.py"
+
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -127,6 +130,12 @@ if [ ! -f "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC" ]; then
     exit 1
 fi
 
+if [ ! -f "$V61C_VISUAL_BIND_DIAGNOSTIC_SRC" ]; then
+    echo "ERROR: v6.1C visual-bind diagnostic is missing:"
+    echo "       $V61C_VISUAL_BIND_DIAGNOSTIC_SRC"
+    exit 1
+fi
+
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
@@ -145,12 +154,14 @@ rm -f \
     "$SCRIPT_DST_DIR/test_v50_object_region_rebind.py" \
     "$V60_DIFFUSION_DIAGNOSTIC_DST" \
     "$V61_CONSTRAINT_DIAGNOSTIC_DST" \
-    "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
+    "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST" \
+    "$V61C_VISUAL_BIND_DIAGNOSTIC_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
 cp "$V61_CONSTRAINT_DIAGNOSTIC_SRC" "$V61_CONSTRAINT_DIAGNOSTIC_DST"
 cp "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_SRC" "$V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
+cp "$V61C_VISUAL_BIND_DIAGNOSTIC_SRC" "$V61C_VISUAL_BIND_DIAGNOSTIC_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -166,4 +177,5 @@ echo "Diagnostic runner: $ADD_INFLUENCE_DIAGNOSTIC_DST"
 echo "v6.0 smoke runner: $V60_DIFFUSION_DIAGNOSTIC_DST"
 echo "v6.1 smoke runner: $V61_CONSTRAINT_DIAGNOSTIC_DST"
 echo "v6.1B smoke runner: $V61B_FINAL_CONSTRAINT_DIAGNOSTIC_DST"
+echo "v6.1C smoke runner: $V61C_VISUAL_BIND_DIAGNOSTIC_DST"
 echo "Done."
