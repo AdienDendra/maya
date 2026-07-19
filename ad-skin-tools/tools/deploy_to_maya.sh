@@ -57,6 +57,9 @@ V310C_COLOR_FEEDBACK_DST="$SCRIPT_DST_DIR/test_region_hard_bind_color_feedback.p
 V310D_CLOSED_LOOP_BIND_SRC="$REPO/scripts/test_region_closed_loop_consensus_bind.py"
 V310D_CLOSED_LOOP_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_consensus_bind.py"
 
+V310E_LOCAL_RUN_BIND_SRC="$REPO/scripts/test_region_local_closed_loop_runs_bind.py"
+V310E_LOCAL_RUN_BIND_DST="$SCRIPT_DST_DIR/test_region_local_closed_loop_runs_bind.py"
+
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -93,6 +96,7 @@ required_files=(
     "$PACKAGE_SRC/region/boundary_coherence.py"
     "$PACKAGE_SRC/region/boundary_ring_coherence.py"
     "$PACKAGE_SRC/region/closed_loop_consensus.py"
+    "$PACKAGE_SRC/region/local_closed_loop_runs.py"
     "$PACKAGE_SRC/region/solver.py"
     "$PACKAGE_SRC/ui/component_flood_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
@@ -143,6 +147,12 @@ if [ ! -f "$V310D_CLOSED_LOOP_BIND_SRC" ]; then
     exit 1
 fi
 
+if [ ! -f "$V310E_LOCAL_RUN_BIND_SRC" ]; then
+    echo "ERROR: v3.10E local-run consensus bind is missing:"
+    echo "       $V310E_LOCAL_RUN_BIND_SRC"
+    exit 1
+fi
+
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
@@ -163,7 +173,8 @@ rm -f \
     "$V310_BOUNDARY_DIAGNOSTIC_DST" \
     "$V310B_BOUNDARY_RING_DIAGNOSTIC_DST" \
     "$V310C_COLOR_FEEDBACK_DST" \
-    "$V310D_CLOSED_LOOP_BIND_DST"
+    "$V310D_CLOSED_LOOP_BIND_DST" \
+    "$V310E_LOCAL_RUN_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
@@ -171,6 +182,7 @@ cp "$V310_BOUNDARY_DIAGNOSTIC_SRC" "$V310_BOUNDARY_DIAGNOSTIC_DST"
 cp "$V310B_BOUNDARY_RING_DIAGNOSTIC_SRC" "$V310B_BOUNDARY_RING_DIAGNOSTIC_DST"
 cp "$V310C_COLOR_FEEDBACK_SRC" "$V310C_COLOR_FEEDBACK_DST"
 cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
+cp "$V310E_LOCAL_RUN_BIND_SRC" "$V310E_LOCAL_RUN_BIND_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -188,4 +200,5 @@ echo "v3.10 Region smoke runner: $V310_BOUNDARY_DIAGNOSTIC_DST"
 echo "v3.10B Region ring runner: $V310B_BOUNDARY_RING_DIAGNOSTIC_DST"
 echo "v3.10C Region color runner: $V310C_COLOR_FEEDBACK_DST"
 echo "v3.10D closed-loop bind runner: $V310D_CLOSED_LOOP_BIND_DST"
+echo "v3.10E local-run bind runner: $V310E_LOCAL_RUN_BIND_DST"
 echo "Done."
