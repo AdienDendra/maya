@@ -237,10 +237,10 @@ def _loop_axis_geometry(region_result, vertex_ids, owner_indices):
     if not np.all(np.isfinite(eigenvalues)):
         return None
 
-    numerical_bound = float(
-        np.finfo(np.float64).eps
-        * max(1.0, float(np.max(np.abs(eigenvalues))))
-    )
+    largest_variance = float(np.max(np.abs(eigenvalues)))
+    if largest_variance == 0.0:
+        return None
+    numerical_bound = float(np.finfo(np.float64).eps * largest_variance)
     if float(eigenvalues[1]) <= numerical_bound:
         return None
 
