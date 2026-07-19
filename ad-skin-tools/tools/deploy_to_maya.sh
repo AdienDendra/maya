@@ -63,6 +63,9 @@ V310E_LOCAL_RUN_BIND_DST="$SCRIPT_DST_DIR/test_region_local_closed_loop_runs_bin
 V310F_CLOSED_LOOP_FACING_BIND_SRC="$REPO/scripts/test_region_closed_loop_facing_bind.py"
 V310F_CLOSED_LOOP_FACING_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_facing_bind.py"
 
+V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC="$REPO/scripts/test_region_closed_loop_ambiguous_neighbor_bind.py"
+V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_ambiguous_neighbor_bind.py"
+
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
@@ -96,6 +99,7 @@ required_files=(
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/joint_automatic_bind.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
+    "$PACKAGE_SRC/region/ambiguous_neighbor_resolution.py"
     "$PACKAGE_SRC/region/boundary_coherence.py"
     "$PACKAGE_SRC/region/boundary_ring_coherence.py"
     "$PACKAGE_SRC/region/closed_loop_consensus.py"
@@ -163,6 +167,12 @@ if [ ! -f "$V310F_CLOSED_LOOP_FACING_BIND_SRC" ]; then
     exit 1
 fi
 
+if [ ! -f "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC" ]; then
+    echo "ERROR: v3.10G ambiguous-neighbour bind is missing:"
+    echo "       $V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC"
+    exit 1
+fi
+
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
 cp -r "$PACKAGE_SRC" "$PACKAGE_DST"
@@ -185,7 +195,8 @@ rm -f \
     "$V310C_COLOR_FEEDBACK_DST" \
     "$V310D_CLOSED_LOOP_BIND_DST" \
     "$V310E_LOCAL_RUN_BIND_DST" \
-    "$V310F_CLOSED_LOOP_FACING_BIND_DST"
+    "$V310F_CLOSED_LOOP_FACING_BIND_DST" \
+    "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
@@ -195,6 +206,7 @@ cp "$V310C_COLOR_FEEDBACK_SRC" "$V310C_COLOR_FEEDBACK_DST"
 cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
 cp "$V310E_LOCAL_RUN_BIND_SRC" "$V310E_LOCAL_RUN_BIND_DST"
 cp "$V310F_CLOSED_LOOP_FACING_BIND_SRC" "$V310F_CLOSED_LOOP_FACING_BIND_DST"
+cp "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_SRC" "$V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -214,4 +226,5 @@ echo "v3.10C Region color runner: $V310C_COLOR_FEEDBACK_DST"
 echo "v3.10D closed-loop bind runner: $V310D_CLOSED_LOOP_BIND_DST"
 echo "v3.10E local-run bind runner: $V310E_LOCAL_RUN_BIND_DST"
 echo "v3.10F closed-loop facing runner: $V310F_CLOSED_LOOP_FACING_BIND_DST"
+echo "v3.10G ambiguous-neighbour runner: $V310G_AMBIGUOUS_NEIGHBOUR_BIND_DST"
 echo "Done."
