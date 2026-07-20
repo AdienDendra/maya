@@ -4,7 +4,7 @@ import builtins
 
 import maya.cmds as cmds
 
-from ad_skin_tools.components import flood
+from ad_skin_tools.components import flood_v81 as flood
 from ad_skin_tools.ui import component_flood_section
 from ad_skin_tools.ui import joint_list
 
@@ -18,7 +18,7 @@ def install(tool_window_module) -> None:
 
     component_flood_section.apply_component_flood = apply_component_flood
     tool_window_module.show_help = show_help
-    tool_window_module.WINDOW_LABEL = "AD Skin Weights Tool v8.0"
+    tool_window_module.WINDOW_LABEL = "AD Skin Weights Tool v8.1"
     tool_window_module._V80_WEIGHTED_COMPONENT_FLOOD_INSTALLED = True
 
 
@@ -134,7 +134,7 @@ def apply_component_flood() -> None:
 
 def show_help() -> None:
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v8.0",
+        title="AD Skin Weights Tool v8.1",
         message=(
             "Binding\n"
             "- Smoothing Iterations remains the v7.5 level from 0 to 10.\n"
