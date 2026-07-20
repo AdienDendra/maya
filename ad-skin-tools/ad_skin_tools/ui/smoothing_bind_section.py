@@ -1,4 +1,4 @@
-"""v7.5 Binding UI with artist-facing smoothing levels from zero to ten."""
+"""Binding UI with artist-facing smoothing levels from zero to ten."""
 
 import builtins
 
@@ -16,12 +16,13 @@ DEFAULT_ITERATIONS = 0
 
 _TOOL_WINDOW = None
 _SKIN_OPERATIONS = None
+_BASE_SET_COMMON_ENABLED = None
 
 
 def install(tool_window_module, skin_operations_module) -> None:
-    """Install the v7.5 slider and production bind callbacks idempotently."""
+    """Install the smoothing slider and production bind callbacks."""
 
-    global _TOOL_WINDOW, _SKIN_OPERATIONS
+    global _TOOL_WINDOW, _SKIN_OPERATIONS, _BASE_SET_COMMON_ENABLED
     _TOOL_WINDOW = tool_window_module
     _SKIN_OPERATIONS = skin_operations_module
 
@@ -33,17 +34,14 @@ def install(tool_window_module, skin_operations_module) -> None:
     _TOOL_WINDOW.apply_operation = apply_bind_skin
     _TOOL_WINDOW.show_help = show_help
 
-    current_set_common_enabled = _SKIN_OPERATIONS._set_common_enabled
-    if current_set_common_enabled is not _set_common_enabled:
-        _SKIN_OPERATIONS._V75_BASE_SET_COMMON_ENABLED = (
-            current_set_common_enabled
-        )
+    current_enabled_callback = _SKIN_OPERATIONS._set_common_enabled
+    if current_enabled_callback is not _set_common_enabled:
+        _BASE_SET_COMMON_ENABLED = current_enabled_callback
     _SKIN_OPERATIONS._set_common_enabled = _set_common_enabled
 
-    _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool v7.5"
+    _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool"
     _TOOL_WINDOW.WINDOW_HEIGHT = 665
     _TOOL_WINDOW.WINDOW_WIDTH = 340
-    _TOOL_WINDOW._V75_SMOOTHING_UI_INSTALLED = True
 
 
 def _build_binding_section() -> None:
@@ -103,7 +101,7 @@ def _build_binding_section() -> None:
 
 
 def apply_bind_skin() -> None:
-    """Run final v3.2 blocking, then apply the selected v7.5 smoothing level."""
+    """Calculate final Region ownership and apply the selected smoothing level."""
 
     wait_cursor_active = False
     try:
@@ -139,7 +137,7 @@ def apply_bind_skin() -> None:
         )
 
         _TOOL_WINDOW._sync_loaded_skin_context()
-        builtins.AD_SKIN_V75_UI_RESULT = result
+        builtins.AD_SKIN_BIND_RESULT = result
         automatic_surface_commands.print_report(result)
 
         if iterations == 0:
@@ -168,7 +166,7 @@ def apply_bind_skin() -> None:
 
 
 def apply_add_influence() -> None:
-    """Claim pending-joint regions, then apply the shared smoothing level."""
+    """Claim pending-joint regions and apply the shared smoothing level."""
 
     wait_cursor_active = False
     try:
@@ -199,7 +197,9 @@ def apply_add_influence() -> None:
                 .format("\n".join(locked_targets))
             )
 
-        staged_joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+        staged_joints = builtins.list(
+            _TOOL_WINDOW._STATE.get("joints", [])
+        )
         staged_locks = set(
             _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
         )
@@ -281,7 +281,8 @@ def _query_iterations() -> int:
 
 
 def _set_common_enabled(enabled) -> None:
-    _SKIN_OPERATIONS._V75_BASE_SET_COMMON_ENABLED(enabled)
+    if _BASE_SET_COMMON_ENABLED is not None:
+        _BASE_SET_COMMON_ENABLED(enabled)
     if cmds.intSliderGrp(CTRL_SMOOTHING_ITERATIONS, exists=True):
         cmds.intSliderGrp(
             CTRL_SMOOTHING_ITERATIONS,
@@ -292,23 +293,19 @@ def _set_common_enabled(enabled) -> None:
 
 def show_help() -> None:
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v7.5",
+        title="AD Skin Weights Tool",
         message=(
             "Binding\n"
             "- Smoothing Iterations is an artist-facing level from 0 to 10.\n"
-            "- Level 0 preserves final v3.2 hard blocking with no smoothing.\n"
+            "- Level 0 preserves hard blocking with no smoothing.\n"
             "- Each positive level runs two internal topology diffusion passes.\n"
-            "- Level 5 therefore runs 10 passes and is the normal target.\n"
-            "- Level 10 runs 20 passes for very dense characters or extra softness.\n"
-            "- Relaxation is 1.0 for both Bind Skin and Add Influence.\n"
-            "- Positive smoothing uses Max Influences 5, or fewer when fewer than "
-            "five joints are available.\n"
+            "- Level 5 runs 10 passes and Level 10 runs 20 passes.\n"
+            "- Positive smoothing uses Max Influences 5, or fewer when fewer "
+            "joints are available.\n"
             "- Bind Skin creates the initial skinCluster from all listed joints.\n"
-            "- Add Influence evaluates final Region ownership for selected pending "
-            "joints and changes only their unlocked claimed rows.\n\n"
-            "Component\n"
-            "- Flood assigns selected mesh components to one selected influence.\n\n"
-            "Region remains the final blocking authority. Smoothing changes weights, "
+            "- Add Influence evaluates Region ownership for selected pending joints "
+            "and changes only their unlocked claimed rows.\n\n"
+            "Region remains the blocking authority. Smoothing changes weights, "
             "not ownership."
         ),
         button=["OK"],
