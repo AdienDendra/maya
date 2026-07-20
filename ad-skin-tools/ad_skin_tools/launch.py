@@ -1,5 +1,10 @@
 import importlib
 
+from ad_skin_tools.components import smooth_undo as _component_smooth_undo
+
+
+_component_smooth_undo.install()
+
 
 def _install_ui(
     tool_window,
@@ -37,6 +42,8 @@ def reload_modules():
     import ad_skin_tools.components.selection as weighted_component_selection
     import ad_skin_tools.components.flood as weighted_component_flood
     import ad_skin_tools.components.smooth as component_smooth
+    import ad_skin_tools.components.undoable_weights as undoable_weights
+    import ad_skin_tools.components.smooth_undo as component_smooth_undo
 
     import ad_skin_tools.region.maya_scene as region_maya_scene
     import ad_skin_tools.region.distance_ranking as region_distance_ranking
@@ -75,6 +82,8 @@ def reload_modules():
         weighted_component_selection,
         weighted_component_flood,
         component_smooth,
+        undoable_weights,
+        component_smooth_undo,
         region_maya_scene,
         region_distance_ranking,
         region_exact_tie,
