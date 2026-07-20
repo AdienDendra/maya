@@ -1,8 +1,8 @@
 # AD Skin Tool Region Ownership
 
-`ad_skin_tools.region` is the accepted universal hard-ownership foundation. It
-replaces the experimental `ad_skin_tools.v3` package name while preserving the
-validated distance, connectivity, and local-facing mathematics.
+`ad_skin_tools.region` is the hard-ownership foundation used by Bind Skin and
+Add Influence. It contains the validated distance, connectivity, local-facing,
+closed-loop, and exact-tie resolution stages.
 
 ## Production pipeline
 
@@ -15,16 +15,18 @@ validated distance, connectivity, and local-facing mathematics.
    world-space face-normal orientation.
 6. Keep interior-facing regions as co-primary.
 7. Advance rejected detached vertices to their next exact distance candidate and
-   repeat until every vertex has a valid primary/co-primary owner.
+   repeat until every vertex has a valid primary or co-primary owner.
+8. Resolve closed-loop and exact-tie ambiguity through the approved geometric
+   guards and distance tie-break stages.
 
 Candidate rank moves only farther from the vertex, so no arbitrary iteration
-limit is needed. Exact ties, mixed normal signs, and candidate exhaustion are
-reported as underdetermined instead of being resolved with joint names,
-selection order, region size, or tuned thresholds.
+limit is needed. Joint names, hierarchy, selection order, region size, and tuned
+artist thresholds are not ownership criteria.
 
-## UI path
+## Runtime path
 
-The existing **Bind Automatic Surface** action calls
-`ad_skin_tools.core.joint_automatic_bind`. That core boundary now delegates
-ownership to `ad_skin_tools.region.solve_region_ownership`, then creates a
-skinCluster and writes one influence at weight `1.0` for every vertex.
+Bind Skin calls `ad_skin_tools.core.automatic_surface_commands`, which delegates
+to the Region solver, applies the approved blocking guards, optionally smooths
+the immutable owner map, creates the skinCluster, and writes the final weights.
+Add Influence evaluates the same ownership pipeline against existing and pending
+joints, then writes only accepted unlocked claims.
