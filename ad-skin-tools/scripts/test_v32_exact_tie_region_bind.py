@@ -132,17 +132,18 @@ def _print_exact_tie_diagnostics(region_result):
                 diagnostic.resolution_pass,
             )
         )
-        for candidate in diagnostic.candidates:
-            name = _short_name(
-                region_result.influences[int(candidate.influence_index)]
-            )
+        for index, candidate_index in enumerate(
+            diagnostic.candidate_influence_indices
+        ):
             print(
-                "    {} | boundary edges={} | mean edge squared={} | "
-                "territory centroid squared={}".format(
-                    name,
-                    candidate.boundary_edge_count,
-                    repr(candidate.mean_boundary_squared_edge_length),
-                    repr(candidate.territory_centroid_squared_distance),
+                "    {} | boundary edges={} | mean edge squared={}".format(
+                    _short_name(
+                        region_result.influences[int(candidate_index)]
+                    ),
+                    diagnostic.boundary_edge_counts[index],
+                    repr(
+                        diagnostic.mean_boundary_squared_edge_lengths[index]
+                    ),
                 )
             )
 
@@ -216,10 +217,6 @@ def run():
     print(
         "  resolved by neighbour edge length:",
         tie_result.neighbour_edge_length_component_count,
-    )
-    print(
-        "  resolved by territory centroid:",
-        tie_result.territory_centroid_component_count,
     )
     print(
         "  resolved by spatial canonical fallback:",
