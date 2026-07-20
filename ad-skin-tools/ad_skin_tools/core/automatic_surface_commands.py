@@ -1,9 +1,9 @@
-"""Stable UI command boundary for Region Ownership binding."""
+"""Stable UI command boundary for v7.3 final blocking and smoothing."""
 
 import builtins
 from typing import Optional, Sequence
 
-from ad_skin_tools.core.joint_automatic_bind import (
+from ad_skin_tools.core.smoothed_automatic_bind import (
     AutomaticSurfaceBindOptions,
     AutomaticSurfaceBindResult,
     bind_object_automatic_surface as _bind_object_automatic_surface,
@@ -16,7 +16,7 @@ def bind_object_automatic_surface(
     joints: Sequence[str],
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
-    """Bind one unskinned mesh from one complete user-supplied joint list."""
+    """Bind one unskinned mesh using final v3.2 ownership and v7.3 smoothing."""
 
     result = _bind_object_automatic_surface(
         mesh=mesh,
@@ -24,6 +24,7 @@ def bind_object_automatic_surface(
         options=options,
     )
     builtins.AD_SKIN_REGION_RESULT = result
+    builtins.AD_SKIN_V73_UI_RESULT = result
     return result
 
 
