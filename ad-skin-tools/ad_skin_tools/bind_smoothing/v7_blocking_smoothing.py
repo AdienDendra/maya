@@ -1,18 +1,20 @@
-"""v7.0 integration: final Region blocking followed by constrained smoothing."""
+"""v7.1 integration: exact-tie-complete blocking then constrained smoothing."""
 
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
 
+from ad_skin_tools.bind_smoothing.cutoff_projection import (
+    GeometricMaxInfluenceResult,
+    enforce_maximum_influences_by_geometry,
+)
 from ad_skin_tools.bind_smoothing.diffusion import (
     BindDiffusionResult,
     diffuse_hard_ownership,
 )
 from ad_skin_tools.bind_smoothing.final_constraints import (
-    DistanceMaxInfluenceResult,
     OwnerMaximumResult,
-    enforce_maximum_influences_by_distance,
     project_region_owner_to_maximum,
 )
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
@@ -43,7 +45,7 @@ class V7BlockingSmoothingResult:
     guarded_result: OppositeGuardConsensusResult
     blocking_result: AmbiguousLoopDistanceResult
     diffusion_result: BindDiffusionResult
-    distance_projection_result: DistanceMaxInfluenceResult
+    distance_projection_result: GeometricMaxInfluenceResult
     owner_maximum_result: OwnerMaximumResult
     validation_result: BindWeightValidationResult
 
@@ -60,7 +62,13 @@ def solve_v7_blocking_smoothing(
     region_result: RegionOwnershipResult,
     options: Optional[BindSmoothingOptions] = None,
 ) -> V7BlockingSmoothingResult:
-    """Run v3.10J/K blocking, then diffuse and constrain those final owners."""
+    """Run final Region blocking, then diffuse and constrain those owners.
+
+    ``region_result`` is expected to come from the v3.2 Region solver. Initial
+    closest-distance ties have therefore already been completed before
+    connectivity and facing. v3.10J/K remains the final blocking authority.
+    Smoothing starts only after that final hard owner map validates cleanly.
+    """
 
     options = (options or BindSmoothingOptions()).validated()
 
@@ -73,10 +81,11 @@ def solve_v7_blocking_smoothing(
         blocking_result.corrected_owner_indices,
         dtype=np.int32,
     )
-    if blocking_owners.shape != (region_result.vertex_count,):
-        raise RuntimeError(
-            "Final blocking owner map does not contain one owner per vertex."
-        )
+    _validate_blocking_contract(
+        region_result=region_result,
+        blocking_result=blocking_result,
+        blocking_owners=blocking_owners,
+    )
 
     adjacency = build_vertex_adjacency(region_result.mesh_shape)
     effective_maximum = options.effective_maximum_influences(
@@ -90,7 +99,7 @@ def solve_v7_blocking_smoothing(
         relaxation=options.relaxation,
     )
 
-    distance_projection = enforce_maximum_influences_by_distance(
+    distance_projection = enforce_maximum_influences_by_geometry(
         weights=diffusion_result.weights,
         owner_indices=blocking_owners,
         vertex_positions=region_result.vertex_positions,
@@ -98,12 +107,13 @@ def solve_v7_blocking_smoothing(
         maximum_influences=effective_maximum,
         weight_epsilon=options.weight_epsilon,
     )
-    if distance_projection.unresolved_exact_tie_vertex_ids:
+    if distance_projection.unresolved_coincident_vertex_ids:
         raise RuntimeError(
-            "v7.0 Max Influences has unresolved exact weight-and-distance ties. "
-            "First vertex IDs: {}".format(
+            "v7.1 Max Influences cannot distinguish exactly coincident cutoff "
+            "joints. Their smoothed weights, vertex distances, and world "
+            "positions are identical. First vertex IDs: {}".format(
                 list(
-                    distance_projection.unresolved_exact_tie_vertex_ids[:20]
+                    distance_projection.unresolved_coincident_vertex_ids[:20]
                 )
             )
         )
@@ -114,7 +124,7 @@ def solve_v7_blocking_smoothing(
     )
     if owner_maximum.owner_below_maximum_after:
         raise RuntimeError(
-            "v7.0 final blocking owner remains below another influence. "
+            "v7.1 final blocking owner remains below another influence. "
             "First vertex IDs: {}".format(
                 list(owner_maximum.owner_below_maximum_after[:20])
             )
@@ -140,3 +150,37 @@ def solve_v7_blocking_smoothing(
         owner_maximum_result=owner_maximum,
         validation_result=validation,
     )
+
+
+def _validate_blocking_contract(
+    region_result,
+    blocking_result,
+    blocking_owners,
+):
+    expected_shape = (region_result.vertex_count,)
+    if blocking_owners.shape != expected_shape:
+        raise RuntimeError(
+            "Final blocking owner map does not contain one owner per vertex."
+        )
+    if blocking_owners.size and (
+        np.any(blocking_owners < 0)
+        or np.any(blocking_owners >= region_result.influence_count)
+    ):
+        bad = np.where(
+            (blocking_owners < 0)
+            | (blocking_owners >= region_result.influence_count)
+        )[0][:20]
+        raise RuntimeError(
+            "Final blocking owner map contains invalid influence indices. "
+            "First vertex IDs: {}".format(bad.tolist())
+        )
+
+    validation = blocking_result.final_validation
+    if validation.detached_vertex_count or validation.ambiguous_vertex_count:
+        raise RuntimeError(
+            "Smoothing refused an incomplete final blocking map. "
+            "Detached vertices: {}. Ambiguous vertices: {}.".format(
+                validation.detached_vertex_count,
+                validation.ambiguous_vertex_count,
+            )
+        )
