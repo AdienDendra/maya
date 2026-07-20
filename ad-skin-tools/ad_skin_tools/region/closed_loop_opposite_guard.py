@@ -1,9 +1,9 @@
-"""v3.10D closed-loop consensus with an opposite-joint guard.
+"""Closed-loop consensus with an opposite-joint guard.
 
-The frozen v3.10D module remains unchanged. This wrapper reuses its loop
-discovery and diagnostics, rebuilds the owner map from the production Region
-result, and preserves any two-owner loop whose owners form a supported opposite
-pair on the joint set's primary symmetry axis.
+This wrapper reuses the accepted loop discovery and diagnostics, rebuilds the
+owner map from the production Region result, and preserves any two-owner loop
+whose owners form a supported opposite pair on the joint set's primary symmetry
+axis.
 """
 
 from dataclasses import dataclass
@@ -76,7 +76,7 @@ class OppositeGuardConsensusResult:
 def solve_closed_loop_opposite_guard(
     region_result: RegionOwnershipResult,
 ) -> OppositeGuardConsensusResult:
-    """Apply v3.10D except when the two owners are a supported opposite pair."""
+    """Apply closed-loop consensus except for supported opposite-owner pairs."""
 
     base_result = closed_loop_consensus.solve_closed_loop_consensus(region_result)
     axis_context = opposite_axis.build_opposite_axis_context(
@@ -118,7 +118,7 @@ def solve_closed_loop_opposite_guard(
                     )
         else:
             raise RuntimeError(
-                "Unsupported v3.10D loop classification: {}".format(
+                "Unsupported closed-loop classification: {}".format(
                     base.classification
                 )
             )
