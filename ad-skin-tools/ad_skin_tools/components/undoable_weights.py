@@ -14,6 +14,10 @@ np = ensure_numpy()
 COMMAND_NAME = "adSkinSetWeightMatrixV81"
 
 
+def maya_useNewAPI():
+    pass
+
+
 def apply_undoable_weights(
     skin_cluster,
     mesh_shape,
