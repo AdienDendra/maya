@@ -1,16 +1,9 @@
-"""Topology completion for exact closest-distance ties.
+"""Complete exact closest-distance ties before Region connectivity.
 
-Distance ranking deliberately leaves a vertex unresolved when several joint
-pivots have the exact same minimum squared distance.  This module turns those
-candidate sets into a complete initial one-owner map before Region connectivity
-and facing are evaluated.
-
-Resolution is deterministic and does not inspect joint names, hierarchy, or UI
-selection order.  Exact-tie vertices are partitioned into connected components
-that share the same exact-minimum candidate set.  Components are resolved from
-already-owned neighbouring vertices first, then by boundary edge geometry.  A
-territory-centroid continuation and a position-only canonical fallback exist so
-a valid geometric ambiguity does not abort the bind; both are reported.
+Distance ranking leaves tied vertices unresolved. This module groups connected
+vertices that share the same exact-minimum candidate set and assigns each group
+from neighbouring owned vertices. Joint names, hierarchy, and UI selection order
+are never used.
 """
 
 from dataclasses import dataclass
@@ -26,23 +19,15 @@ from ad_skin_tools.region.distance_ranking import (
 
 RESOLVED_NEIGHBOUR_SUPPORT = "resolved_neighbour_support"
 RESOLVED_NEIGHBOUR_EDGE_LENGTH = "resolved_neighbour_edge_length"
-RESOLVED_TERRITORY_CENTROID = "resolved_territory_centroid"
 RESOLVED_SPATIAL_CANONICAL = "resolved_spatial_canonical"
-
-
-@dataclass(frozen=True)
-class ExactTieCandidateDiagnostic:
-    influence_index: int
-    boundary_edge_count: int
-    mean_boundary_squared_edge_length: float
-    territory_centroid_squared_distance: float
 
 
 @dataclass(frozen=True)
 class ExactTieComponentDiagnostic:
     vertex_ids: Tuple[int, ...]
     candidate_influence_indices: Tuple[int, ...]
-    candidates: Tuple[ExactTieCandidateDiagnostic, ...]
+    boundary_edge_counts: Tuple[int, ...]
+    mean_boundary_squared_edge_lengths: Tuple[float, ...]
     target_influence_index: int
     classification: str
     resolution_pass: int
@@ -68,33 +53,23 @@ class ExactTieResolutionResult:
     def component_count(self) -> int:
         return len(self.diagnostics)
 
-    @property
-    def neighbour_support_component_count(self) -> int:
+    def classification_count(self, classification: str) -> int:
         return sum(
-            diagnostic.classification == RESOLVED_NEIGHBOUR_SUPPORT
+            diagnostic.classification == classification
             for diagnostic in self.diagnostics
         )
+
+    @property
+    def neighbour_support_component_count(self) -> int:
+        return self.classification_count(RESOLVED_NEIGHBOUR_SUPPORT)
 
     @property
     def neighbour_edge_length_component_count(self) -> int:
-        return sum(
-            diagnostic.classification == RESOLVED_NEIGHBOUR_EDGE_LENGTH
-            for diagnostic in self.diagnostics
-        )
-
-    @property
-    def territory_centroid_component_count(self) -> int:
-        return sum(
-            diagnostic.classification == RESOLVED_TERRITORY_CENTROID
-            for diagnostic in self.diagnostics
-        )
+        return self.classification_count(RESOLVED_NEIGHBOUR_EDGE_LENGTH)
 
     @property
     def spatial_canonical_component_count(self) -> int:
-        return sum(
-            diagnostic.classification == RESOLVED_SPATIAL_CANONICAL
-            for diagnostic in self.diagnostics
-        )
+        return self.classification_count(RESOLVED_SPATIAL_CANONICAL)
 
 
 def resolve_exact_distance_ties(
@@ -102,10 +77,9 @@ def resolve_exact_distance_ties(
     distance_tables: ExactDistanceTables,
     adjacency: Tuple[Tuple[int, ...], ...],
 ) -> ExactTieResolutionResult:
-    """Return a complete initial owner map from exact distance candidates."""
+    """Return one valid exact-minimum owner for every mesh vertex."""
 
     _validate_inputs(distance_result, distance_tables, adjacency)
-
     owners = np.asarray(
         distance_result.nearest_influence_indices,
         dtype=np.int32,
@@ -121,41 +95,49 @@ def resolve_exact_distance_ties(
             resolution_pass_count=0,
         )
 
-    candidate_sets = _exact_candidate_sets(distance_result, distance_tables)
-    components = _candidate_components(
-        distance_result.exact_tie_vertex_ids,
-        candidate_sets,
-        adjacency,
+    candidate_sets = _candidate_sets(distance_result, distance_tables)
+    pending = list(
+        _connected_candidate_components(
+            distance_result.exact_tie_vertex_ids,
+            candidate_sets,
+            adjacency,
+        )
     )
 
-    # A resolved exact minimum occupies the whole first equal-distance group.
-    # Keeping the last rank of that group lets the existing detached-region
-    # search advance directly to the next strictly greater distance.
+    # The current distance group ends at tie_count - 1. If facing later rejects
+    # this owner, the existing detached search advances to the next greater
+    # distance instead of revisiting another equal minimum.
     for vertex_id in distance_result.exact_tie_vertex_ids:
-        candidate_ranks[int(vertex_id)] = (
-            int(distance_result.exact_tie_counts[int(vertex_id)]) - 1
+        vertex_id = int(vertex_id)
+        candidate_ranks[vertex_id] = (
+            int(distance_result.exact_tie_counts[vertex_id]) - 1
         )
 
-    pending = list(components)
     diagnostics = []
     resolution_pass = 0
 
     while pending:
         resolution_pass += 1
         proposals = []
-        still_pending = []
+        unresolved = []
 
         for vertex_ids, candidate_indices in pending:
-            evidence = _candidate_evidence(
+            counts, mean_lengths = _boundary_evidence(
                 vertex_ids=vertex_ids,
                 candidate_indices=candidate_indices,
                 owners=owners,
                 adjacency=adjacency,
                 vertex_positions=distance_result.vertex_positions,
             )
-            decision = _choose_from_boundary(evidence)
+            decision = _choose_neighbour_candidate(
+                candidate_indices,
+                counts,
+                mean_lengths,
+            )
             if decision is None:
-                still_pending.append((vertex_ids, candidate_indices))
+                unresolved.append(
+                    (vertex_ids, candidate_indices, counts, mean_lengths)
+                )
                 continue
 
             target, classification = decision
@@ -163,91 +145,60 @@ def resolve_exact_distance_ties(
                 (
                     vertex_ids,
                     candidate_indices,
-                    evidence,
-                    int(target),
+                    counts,
+                    mean_lengths,
+                    target,
                     classification,
                 )
             )
 
         if proposals:
-            # Synchronous application keeps component order from affecting the
-            # neighbouring evidence read during this pass.
-            for vertex_ids, _, _, target, _ in proposals:
+            # Apply all decisions together so component order cannot influence
+            # another component during the same pass.
+            for vertex_ids, _, _, _, target, _ in proposals:
                 owners[np.asarray(vertex_ids, dtype=np.int32)] = int(target)
 
-            for (
-                vertex_ids,
-                candidate_indices,
-                evidence,
-                target,
-                classification,
-            ) in proposals:
+            for item in proposals:
                 diagnostics.append(
-                    _diagnostic(
-                        vertex_ids=vertex_ids,
-                        candidate_indices=candidate_indices,
-                        evidence=evidence,
-                        target=target,
-                        classification=classification,
-                        resolution_pass=resolution_pass,
-                    )
+                    _make_diagnostic(*item, resolution_pass=resolution_pass)
                 )
-
-            pending = still_pending
+            pending = [
+                (vertex_ids, candidate_indices)
+                for vertex_ids, candidate_indices, _, _ in unresolved
+            ]
             continue
 
-        # No component gained new direct boundary evidence. Resolve the
-        # remaining components from the geometric continuation of each already
-        # owned candidate territory. This remains independent from names and
-        # influence-list order.
-        territory_centroids = _territory_centroids(
-            owners,
-            distance_result.vertex_positions,
-            distance_result.influence_count,
-        )
-
-        for vertex_ids, candidate_indices in still_pending:
-            evidence = _candidate_evidence(
-                vertex_ids=vertex_ids,
-                candidate_indices=candidate_indices,
-                owners=owners,
-                adjacency=adjacency,
-                vertex_positions=distance_result.vertex_positions,
-                territory_centroids=territory_centroids,
+        # A completely balanced neighbour boundary contains no geometric reason
+        # to prefer one exact-minimum candidate. Use a stable world-position
+        # convention rather than joint name or list order, and report every use.
+        for vertex_ids, candidate_indices, counts, mean_lengths in unresolved:
+            target = _spatial_canonical_candidate(
+                candidate_indices,
+                distance_result.influence_positions,
             )
-            decision = _choose_from_territory(evidence)
-            if decision is None:
-                target = _spatial_canonical_candidate(
-                    candidate_indices,
-                    distance_result.influence_positions,
-                )
-                classification = RESOLVED_SPATIAL_CANONICAL
-            else:
-                target = int(decision)
-                classification = RESOLVED_TERRITORY_CENTROID
-
             owners[np.asarray(vertex_ids, dtype=np.int32)] = int(target)
             diagnostics.append(
-                _diagnostic(
-                    vertex_ids=vertex_ids,
-                    candidate_indices=candidate_indices,
-                    evidence=evidence,
-                    target=target,
-                    classification=classification,
+                _make_diagnostic(
+                    vertex_ids,
+                    candidate_indices,
+                    counts,
+                    mean_lengths,
+                    target,
+                    RESOLVED_SPATIAL_CANONICAL,
                     resolution_pass=resolution_pass,
                 )
             )
-
         pending = []
 
     if np.any(owners < 0):
         bad = np.where(owners < 0)[0][:20]
         raise RuntimeError(
-            "Exact-tie resolution left vertices without an owner. First IDs: {}"
-            .format(bad.tolist())
+            "Exact-tie completion produced invalid owners. First IDs: {}".format(
+                bad.tolist()
+            )
         )
 
-    diagnostics.sort(key=lambda item: item.vertex_ids[0])
+    diagnostics.sort(key=lambda diagnostic: diagnostic.vertex_ids[0])
     return ExactTieResolutionResult(
         owner_indices=owners,
         candidate_ranks=candidate_ranks,
@@ -272,7 +223,7 @@ def _validate_inputs(distance_result, distance_tables, adjacency):
         raise ValueError("Mesh adjacency does not match the distance result.")
 
 
-def _exact_candidate_sets(distance_result, distance_tables):
+def _candidate_sets(distance_result, distance_tables):
     result = {}
     for vertex_id in distance_result.exact_tie_vertex_ids:
         vertex_id = int(vertex_id)
@@ -296,13 +247,13 @@ def _exact_candidate_sets(distance_result, distance_tables):
     return result
 
 
-def _candidate_components(vertex_ids, candidate_sets, adjacency):
+def _connected_candidate_components(vertex_ids, candidate_sets, adjacency):
     unseen = set(int(value) for value in vertex_ids)
     components = []
 
     while unseen:
         seed = min(unseen)
-        candidate_indices = candidate_sets[seed]
+        candidates = candidate_sets[seed]
         unseen.remove(seed)
         stack = [seed]
         component = []
@@ -314,174 +265,107 @@ def _candidate_components(vertex_ids, candidate_sets, adjacency):
                 neighbour_id = int(neighbour_id)
                 if (
                     neighbour_id in unseen
-                    and candidate_sets[neighbour_id] == candidate_indices
+                    and candidate_sets[neighbour_id] == candidates
                 ):
                     unseen.remove(neighbour_id)
                     stack.append(neighbour_id)
 
-        components.append(
-            (
-                tuple(sorted(component)),
-                tuple(candidate_indices),
-            )
-        )
+        components.append((tuple(sorted(component)), candidates))
 
     components.sort(key=lambda item: item[0][0])
     return tuple(components)
 
 
-def _candidate_evidence(
+def _boundary_evidence(
     vertex_ids,
     candidate_indices,
     owners,
     adjacency,
     vertex_positions,
-    territory_centroids=None,
 ):
-    component_set = set(int(value) for value in vertex_ids)
-    counts = {int(candidate): 0 for candidate in candidate_indices}
-    edge_squared = {int(candidate): [] for candidate in candidate_indices}
+    component = set(int(value) for value in vertex_ids)
+    count_by_candidate = {
+        int(candidate): 0 for candidate in candidate_indices
+    }
+    lengths_by_candidate = {
+        int(candidate): [] for candidate in candidate_indices
+    }
 
-    for vertex_id in component_set:
-        point = vertex_positions[int(vertex_id)]
-        for neighbour_id in adjacency[int(vertex_id)]:
+    for vertex_id in component:
+        position = vertex_positions[vertex_id]
+        for neighbour_id in adjacency[vertex_id]:
             neighbour_id = int(neighbour_id)
-            if neighbour_id in component_set:
+            if neighbour_id in component:
                 continue
             owner = int(owners[neighbour_id])
-            if owner not in counts:
+            if owner not in count_by_candidate:
                 continue
 
-            delta = vertex_positions[neighbour_id] - point
-            counts[owner] += 1
-            edge_squared[owner].append(float(np.dot(delta, delta)))
+            delta = vertex_positions[neighbour_id] - position
+            count_by_candidate[owner] += 1
+            lengths_by_candidate[owner].append(float(np.dot(delta, delta)))
 
-    component_positions = vertex_positions[
-        np.asarray(sorted(component_set), dtype=np.int32)
-    ]
-    component_centroid = np.mean(component_positions, axis=0, dtype=np.float64)
-
-    evidence = []
-    for candidate in candidate_indices:
-        candidate = int(candidate)
-        values = edge_squared[candidate]
-        mean_edge = (
-            float(np.mean(np.asarray(values, dtype=np.float64)))
-            if values
-            else float("inf")
-        )
-        centroid_distance = float("inf")
-        if territory_centroids is not None:
-            centroid = territory_centroids[candidate]
-            if centroid is not None:
-                delta = component_centroid - centroid
-                centroid_distance = float(np.dot(delta, delta))
-
-        evidence.append(
-            ExactTieCandidateDiagnostic(
-                influence_index=candidate,
-                boundary_edge_count=int(counts[candidate]),
-                mean_boundary_squared_edge_length=mean_edge,
-                territory_centroid_squared_distance=centroid_distance,
-            )
-        )
-
-    return tuple(evidence)
+    counts = tuple(
+        int(count_by_candidate[int(candidate)])
+        for candidate in candidate_indices
+    )
+    mean_lengths = tuple(
+        float(np.mean(lengths_by_candidate[int(candidate)]))
+        if lengths_by_candidate[int(candidate)]
+        else float("inf")
+        for candidate in candidate_indices
+    )
+    return counts, mean_lengths
 
 
-def _choose_from_boundary(evidence):
-    maximum_count = max(item.boundary_edge_count for item in evidence)
+def _choose_neighbour_candidate(candidate_indices, counts, mean_lengths):
+    maximum_count = max(counts)
     if maximum_count <= 0:
         return None
 
-    count_winners = [
-        item for item in evidence if item.boundary_edge_count == maximum_count
+    winners = [
+        index for index, count in enumerate(counts)
+        if int(count) == int(maximum_count)
     ]
-    if len(count_winners) == 1:
+    if len(winners) == 1:
         return (
-            int(count_winners[0].influence_index),
+            int(candidate_indices[winners[0]]),
             RESOLVED_NEIGHBOUR_SUPPORT,
         )
 
-    minimum_edge = min(
-        item.mean_boundary_squared_edge_length for item in count_winners
-    )
-    edge_winners = [
-        item
-        for item in count_winners
-        if _numerically_equal(
-            item.mean_boundary_squared_edge_length,
-            minimum_edge,
-        )
+    minimum_length = min(mean_lengths[index] for index in winners)
+    length_winners = [
+        index for index in winners
+        if _numerically_equal(mean_lengths[index], minimum_length)
     ]
-    if len(edge_winners) == 1:
+    if len(length_winners) == 1:
         return (
-            int(edge_winners[0].influence_index),
+            int(candidate_indices[length_winners[0]]),
             RESOLVED_NEIGHBOUR_EDGE_LENGTH,
         )
     return None
 
 
-def _territory_centroids(owners, vertex_positions, influence_count):
-    centroids = []
-    for influence_index in range(int(influence_count)):
-        vertex_ids = np.where(owners == influence_index)[0].astype(np.int32)
-        if not vertex_ids.size:
-            centroids.append(None)
-            continue
-        centroids.append(
-            np.mean(
-                vertex_positions[vertex_ids],
-                axis=0,
-                dtype=np.float64,
-            )
-        )
-    return tuple(centroids)
-
-
-def _choose_from_territory(evidence):
-    finite = [
-        item
-        for item in evidence
-        if np.isfinite(item.territory_centroid_squared_distance)
-    ]
-    if not finite:
-        return None
-
-    minimum = min(item.territory_centroid_squared_distance for item in finite)
-    winners = [
-        item
-        for item in finite
-        if _numerically_equal(
-            item.territory_centroid_squared_distance,
-            minimum,
-        )
-    ]
-    if len(winners) != 1:
-        return None
-    return int(winners[0].influence_index)
-
-
 def _spatial_canonical_candidate(candidate_indices, influence_positions):
-    candidates = [int(value) for value in candidate_indices]
-    position_keys = {
+    candidates = tuple(int(value) for value in candidate_indices)
+    keys = {
         candidate: tuple(
             float(value) for value in influence_positions[candidate].tolist()
         )
         for candidate in candidates
     }
-    if len(set(position_keys.values())) != len(candidates):
+    if len(set(keys.values())) != len(candidates):
         raise RuntimeError(
-            "Exactly coincident candidate joints cannot be distinguished by "
-            "distance, topology, or spatial position."
+            "Exactly coincident candidate joints cannot be distinguished."
         )
-    return min(candidates, key=lambda candidate: position_keys[candidate])
+    return min(candidates, key=lambda candidate: keys[candidate])
 
 
-def _diagnostic(
+def _make_diagnostic(
     vertex_ids,
     candidate_indices,
-    evidence,
+    counts,
+    mean_lengths,
     target,
     classification,
     resolution_pass,
@@ -491,7 +375,10 @@ def _diagnostic(
         candidate_influence_indices=tuple(
             int(value) for value in candidate_indices
         ),
-        candidates=tuple(evidence),
+        boundary_edge_counts=tuple(int(value) for value in counts),
+        mean_boundary_squared_edge_lengths=tuple(
+            float(value) for value in mean_lengths
+        ),
         target_influence_index=int(target),
         classification=str(classification),
         resolution_pass=int(resolution_pass),
