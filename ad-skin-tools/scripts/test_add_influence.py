@@ -4,15 +4,15 @@ import builtins
 import importlib
 
 from ad_skin_tools.core import add_influence
-from ad_skin_tools.ui import component_flood_section
 from ad_skin_tools.ui import joint_list
+from ad_skin_tools.ui import skin_operations
 
 
 importlib.reload(add_influence)
 
 
 def _loaded_mesh_and_ui_targets():
-    tool_window = component_flood_section._TOOL_WINDOW
+    tool_window = skin_operations._TOOL_WINDOW
     if tool_window is None:
         raise builtins.RuntimeError(
             "AD Skin Tool UI is not installed. Open the tool before running "
