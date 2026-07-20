@@ -1,5 +1,9 @@
 """Automatic bind-smoothing algorithms for Bind Skin and Add Influence."""
 
+from ad_skin_tools.bind_smoothing.cutoff_projection import (
+    GeometricMaxInfluenceResult,
+    enforce_maximum_influences_by_geometry,
+)
 from ad_skin_tools.bind_smoothing.diffusion import (
     BindDiffusionResult,
     diffuse_hard_ownership,
@@ -27,10 +31,12 @@ __all__ = [
     "BindSmoothingOptions",
     "BindSmoothingResult",
     "BindWeightValidationResult",
+    "GeometricMaxInfluenceResult",
     "MaxInfluenceProjectionResult",
     "V7BlockingSmoothingResult",
     "diffuse_hard_ownership",
     "enforce_maximum_influences",
+    "enforce_maximum_influences_by_geometry",
     "solve_bind_smoothing",
     "solve_v7_blocking_smoothing",
     "validate_bind_weights",
