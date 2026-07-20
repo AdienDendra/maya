@@ -59,7 +59,7 @@ def solve_bind_smoothing(
     influence_positions: np.ndarray,
     options: Optional[BindSmoothingOptions] = None,
 ) -> BindSmoothingResult:
-    """Smooth final v3.2 blocking ownership without recalculating ownership.
+    """Smooth final blocking ownership without recalculating ownership.
 
     ``owner_indices`` is the final blocking contract: exactly one valid influence
     index per vertex. The array is copied on entry and never modified.
