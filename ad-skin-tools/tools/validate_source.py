@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 from pathlib import Path
 import re
 import sys
-from typing import Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -115,50 +115,125 @@ def _validate_internal_imports(
     errors: list[str],
 ) -> None:
     for node in ast.walk(tree):
-        module_names: Iterable[str]
-
         if isinstance(node, ast.Import):
-            module_names = (
-                alias.name
-                for alias in node.names
-                if alias.name.startswith("ad_skin_tools")
-            )
-        elif isinstance(node, ast.ImportFrom):
-            if node.level or not node.module:
-                continue
-            module_names = (
-                (node.module,)
-                if node.module.startswith("ad_skin_tools")
-                else ()
-            )
-        else:
+            for alias in node.names:
+                if not alias.name.startswith("ad_skin_tools"):
+                    continue
+                if not _internal_module_exists(alias.name):
+                    _append_missing_import(
+                        errors,
+                        source_path,
+                        node,
+                        alias.name,
+                    )
             continue
 
-        for module_name in module_names:
-            if not _internal_module_exists(module_name):
-                errors.append(
-                    "missing internal import {}:{}: {}".format(
-                        source_path,
-                        getattr(node, "lineno", "?"),
-                        module_name,
-                    )
-                )
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level or not node.module:
+            continue
+        if not node.module.startswith("ad_skin_tools"):
+            continue
+
+        module_path = _internal_module_path(node.module)
+        if module_path is None:
+            _append_missing_import(
+                errors,
+                source_path,
+                node,
+                node.module,
+            )
+            continue
+
+        if not module_path.is_dir():
+            continue
+
+        package_symbols = _package_symbols(module_path)
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            candidate_name = "{}.{}".format(node.module, alias.name)
+            if _internal_module_exists(candidate_name):
+                continue
+            if alias.name in package_symbols:
+                continue
+            _append_missing_import(
+                errors,
+                source_path,
+                node,
+                candidate_name,
+            )
+
+
+def _append_missing_import(
+    errors: list[str],
+    source_path: Path,
+    node: ast.AST,
+    module_name: str,
+) -> None:
+    errors.append(
+        "missing internal import {}:{}: {}".format(
+            source_path,
+            getattr(node, "lineno", "?"),
+            module_name,
+        )
+    )
 
 
 def _internal_module_exists(module_name: str) -> bool:
+    return _internal_module_path(module_name) is not None
+
+
+def _internal_module_path(module_name: str) -> Path | None:
     parts = module_name.split(".")
     if not parts or parts[0] != "ad_skin_tools":
-        return True
+        return PACKAGE_ROOT
 
     relative_parts = parts[1:]
     if not relative_parts:
-        return (PACKAGE_ROOT / "__init__.py").is_file()
+        return PACKAGE_ROOT if (PACKAGE_ROOT / "__init__.py").is_file() else None
 
     module_path = PACKAGE_ROOT.joinpath(*relative_parts)
-    return (
-        module_path.with_suffix(".py").is_file()
-        or (module_path / "__init__.py").is_file()
-    )
+    file_path = module_path.with_suffix(".py")
+    if file_path.is_file():
+        return file_path
+    if (module_path / "__init__.py").is_file():
+        return module_path
+    return None
+
+
+@lru_cache(maxsize=None)
+def _package_symbols(package_path: Path) -> frozenset[str]:
+    init_path = package_path / "__init__.py"
+    if not init_path.is_file():
+        return frozenset()
+
+    try:
+        tree = ast.parse(
+            init_path.read_text(encoding="utf-8"),
+            filename=str(init_path),
+        )
+    except SyntaxError:
+        return frozenset()
+
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+
+    return frozenset(names)
 
 
 if __name__ == "__main__":
