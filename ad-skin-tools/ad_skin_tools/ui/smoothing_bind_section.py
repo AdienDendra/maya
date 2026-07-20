@@ -1,4 +1,4 @@
-"""v7.3 Binding UI: integer smoothing iterations from zero to ten."""
+"""v7.4 Binding UI: integer smoothing iterations from zero to ten."""
 
 import builtins
 
@@ -19,7 +19,7 @@ _SKIN_OPERATIONS = None
 
 
 def install(tool_window_module, skin_operations_module) -> None:
-    """Install the v7.3 slider and production bind callback idempotently."""
+    """Install the v7.4 slider and production bind callback idempotently."""
 
     global _TOOL_WINDOW, _SKIN_OPERATIONS
     _TOOL_WINDOW = tool_window_module
@@ -35,15 +35,15 @@ def install(tool_window_module, skin_operations_module) -> None:
 
     current_set_common_enabled = _SKIN_OPERATIONS._set_common_enabled
     if current_set_common_enabled is not _set_common_enabled:
-        _SKIN_OPERATIONS._V73_BASE_SET_COMMON_ENABLED = (
+        _SKIN_OPERATIONS._V74_BASE_SET_COMMON_ENABLED = (
             current_set_common_enabled
         )
     _SKIN_OPERATIONS._set_common_enabled = _set_common_enabled
 
-    _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool v7.3"
+    _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool v7.4"
     _TOOL_WINDOW.WINDOW_HEIGHT = 690
     _TOOL_WINDOW.WINDOW_WIDTH = 340
-    _TOOL_WINDOW._V73_SMOOTHING_UI_INSTALLED = True
+    _TOOL_WINDOW._V74_SMOOTHING_UI_INSTALLED = True
 
 
 def _build_binding_section() -> None:
@@ -115,7 +115,7 @@ def _build_binding_section() -> None:
 
 
 def apply_bind_skin() -> None:
-    """Run final v3.2 blocking, then apply the selected v7.3 smoothing passes."""
+    """Run final v3.2 blocking, then apply the selected v7.4 smoothing passes."""
 
     wait_cursor_active = False
     try:
@@ -151,7 +151,7 @@ def apply_bind_skin() -> None:
         )
 
         _TOOL_WINDOW._sync_loaded_skin_context()
-        builtins.AD_SKIN_V73_UI_RESULT = result
+        builtins.AD_SKIN_V74_UI_RESULT = result
         automatic_surface_commands.print_report(result)
 
         if iterations == 0:
@@ -292,7 +292,7 @@ def _query_iterations() -> int:
 
 
 def _set_common_enabled(enabled) -> None:
-    _SKIN_OPERATIONS._V73_BASE_SET_COMMON_ENABLED(enabled)
+    _SKIN_OPERATIONS._V74_BASE_SET_COMMON_ENABLED(enabled)
     if cmds.intSliderGrp(CTRL_SMOOTHING_ITERATIONS, exists=True):
         cmds.intSliderGrp(
             CTRL_SMOOTHING_ITERATIONS,
@@ -303,7 +303,7 @@ def _set_common_enabled(enabled) -> None:
 
 def show_help() -> None:
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v7.3",
+        title="AD Skin Weights Tool v7.4",
         message=(
             "Binding\n"
             "- Smoothing Iterations 0: preserve final v3.2 hard blocking.\n"
