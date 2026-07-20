@@ -1,4 +1,4 @@
-"""Stable UI command boundary for v7.3 final blocking and smoothing."""
+"""UI command boundary for automatic surface binding."""
 
 import builtins
 from typing import Optional, Sequence
@@ -16,7 +16,7 @@ def bind_object_automatic_surface(
     joints: Sequence[str],
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
-    """Bind one unskinned mesh using final v3.2 ownership and v7.3 smoothing."""
+    """Bind one unskinned mesh using final ownership and smoothing."""
 
     result = _bind_object_automatic_surface(
         mesh=mesh,
@@ -24,7 +24,6 @@ def bind_object_automatic_surface(
         options=options,
     )
     builtins.AD_SKIN_REGION_RESULT = result
-    builtins.AD_SKIN_V73_UI_RESULT = result
     return result
 
 
