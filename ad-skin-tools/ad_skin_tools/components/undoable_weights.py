@@ -91,12 +91,16 @@ class _SetWeightMatrixCommand(om.MPxCommand):
         return _SetWeightMatrixCommand()
 
     def doIt(self, args):
-        if args.length() != 1:
+        try:
+            payload_path = args.asString(0)
+        except (IndexError, RuntimeError, TypeError) as exc:
             raise RuntimeError(
-                "{} requires one weight payload path.".format(COMMAND_NAME)
+                "{} requires one weight payload path.\n\n{}".format(
+                    COMMAND_NAME,
+                    exc,
+                )
             )
 
-        payload_path = args.asString(0)
         with np.load(payload_path, allow_pickle=False) as payload:
             self._skin_cluster = str(payload["skin_cluster"].item())
             self._mesh_shape = str(payload["mesh_shape"].item())
@@ -140,7 +144,7 @@ def initializePlugin(plugin_object):
     plugin = om.MFnPlugin(
         plugin_object,
         "AD Skin Tool",
-        "8.1",
+        "8.1.1",
         "Any",
     )
     plugin.registerCommand(
