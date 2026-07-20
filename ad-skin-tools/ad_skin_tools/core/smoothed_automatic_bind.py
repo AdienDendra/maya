@@ -1,4 +1,4 @@
-"""Production v7.4 bind: final v3.2 blocking followed by optional smoothing."""
+"""Automatic bind with final blocking followed by optional smoothing."""
 
 from dataclasses import dataclass
 import time
@@ -68,7 +68,7 @@ def bind_object_automatic_surface(
     joints: Sequence[str],
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
-    """Bind final v3.2 ownership, optionally smoothing it for zero to ten passes."""
+    """Bind final ownership and optionally smooth the resulting weights."""
 
     started = time.perf_counter()
     options = options or AutomaticSurfaceBindOptions()
@@ -110,7 +110,7 @@ def bind_object_automatic_surface(
     )
     if zero_ownership and options.fail_on_zero_ownership:
         raise RuntimeError(
-            "Final v3.2 blocking produced no vertices for these joints:\n{}".format(
+            "Final blocking produced no vertices for these joints:\n{}".format(
                 "\n".join(zero_ownership)
             )
         )
@@ -132,11 +132,11 @@ def bind_object_automatic_surface(
         smoothing_result.blocking_owner_indices,
         final_owners,
     ):
-        raise RuntimeError("Smoothing modified the final v3.2 blocking owner map.")
+        raise RuntimeError("Smoothing modified the final blocking owner map.")
 
     adapter = None
     try:
-        with undo_chunk("AD Skin Tool v7.4 Bind Skin"):
+        with undo_chunk("AD Skin Tool Bind Skin"):
             adapter = create_closest_skin_cluster(
                 mesh_shape=region_result.mesh_shape,
                 mesh_transform=region_result.mesh_transform,
@@ -205,18 +205,18 @@ def bind_object_automatic_surface(
 
 
 def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
-    print("\n[AD Skin Tool v7.4 - Final Blocking + Smoothing Bind]")
+    print("\n[AD Skin Tool - Final Blocking + Smoothing Bind]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Vertices:", result.vertex_count)
     print("Influences:", result.influence_count)
     print("Topology components:", result.topology_component_count)
     print(
-        "v3.2 exact-tie vertices:",
+        "Exact-tie vertices:",
         result.region_result.exact_tie_result.exact_tie_vertex_count,
     )
     print(
-        "v3.2 exact-tie components:",
+        "Exact-tie components:",
         result.region_result.exact_tie_result.component_count,
     )
     print("Final blocking owner rows:", result.blocking_owner_indices.size)
@@ -299,7 +299,7 @@ def _validate_stored_weights(adapter, expected, maximum_influences):
             )
         )[0][:20]
         raise RuntimeError(
-            "Maya stored weights differ from the v7.4 matrix. Maximum "
+            "Maya stored weights differ from the calculated matrix. Maximum "
             "difference: {}. First vertex IDs: {}".format(
                 maximum_difference,
                 bad.tolist(),
