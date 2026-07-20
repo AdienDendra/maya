@@ -4,7 +4,9 @@ import builtins
 
 import maya.cmds as cmds
 
+from ad_skin_tools.core import add_influence
 from ad_skin_tools.core import automatic_surface_commands
+from ad_skin_tools.ui import joint_list
 
 
 CTRL_SMOOTHING_ITERATIONS = "adSkin_smoothingIterations"
@@ -93,7 +95,7 @@ def _build_binding_section() -> None:
             (
                 _SKIN_OPERATIONS.CTRL_ADD_INFLUENCE_BUTTON,
                 "Add Influence",
-                lambda *_: _SKIN_OPERATIONS.apply_add_influence(),
+                lambda *_: apply_add_influence(),
             ),
         ],
         height=38,
@@ -177,6 +179,87 @@ def apply_bind_skin() -> None:
         _TOOL_WINDOW._set_bind_busy(False)
 
 
+def apply_add_influence() -> None:
+    """Claim pending-joint regions, then optionally smooth only claimed rows."""
+
+    wait_cursor_active = False
+    try:
+        _TOOL_WINDOW._require_not_busy()
+        _TOOL_WINDOW._require_loaded_mesh()
+        if not _TOOL_WINDOW._STATE.get("has_skin_cluster"):
+            raise RuntimeError(
+                "Add Influence requires an existing skinCluster.\n\n"
+                "Use Bind Skin first."
+            )
+
+        selected_rows = builtins.list(joint_list.selected_joint_paths())
+        bound = set(_TOOL_WINDOW._STATE.get("bound_joint_paths", set()))
+        targets = [joint for joint in selected_rows if joint not in bound]
+        if not targets:
+            raise RuntimeError(
+                "Select at least one new pending joint in the influence list."
+            )
+
+        locked_targets = [
+            joint
+            for joint in targets
+            if joint_list.joint_is_locked(joint)
+        ]
+        if locked_targets:
+            raise RuntimeError(
+                "Unlock the selected pending joint(s) before Add Influence:\n{}"
+                .format("\n".join(locked_targets))
+            )
+
+        staged_joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+        staged_locks = set(
+            _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
+        )
+        iterations = _query_iterations()
+        status = "Calculating final Region ownership for new influences..."
+        if iterations > 0:
+            status = (
+                "Calculating Region claims and smoothing {} iteration(s)..."
+                .format(iterations)
+            )
+
+        _SKIN_OPERATIONS._set_add_influence_busy(True, status)
+        cmds.waitCursor(state=True)
+        wait_cursor_active = True
+        cmds.refresh(force=True)
+
+        result = add_influence.add_influences_by_region(
+            mesh=_TOOL_WINDOW._STATE["mesh_shape"],
+            target_joints=targets,
+            smoothing_iterations=iterations,
+        )
+
+        joint_list.sync_after_flood_preserving_pending(
+            staged_joints,
+            staged_locks,
+        )
+        joint_list.select_joint_paths(result.target_joints)
+
+        builtins.AD_SKIN_ADD_INFLUENCE_RESULT = result
+        add_influence.print_report(result)
+        _TOOL_WINDOW._info(
+            "Added {} influence(s); {} vertices claimed; smoothing {}.".format(
+                len(result.target_joints),
+                result.claimed_vertex_count,
+                result.smoothing_iterations,
+            )
+        )
+    except Exception as exc:
+        _TOOL_WINDOW._show_error(exc)
+    finally:
+        if wait_cursor_active:
+            try:
+                cmds.waitCursor(state=False)
+            except Exception:
+                pass
+        _SKIN_OPERATIONS._set_add_influence_busy(False)
+
+
 def _stored_iterations() -> int:
     value = int(
         _TOOL_WINDOW._STATE.get(
@@ -228,7 +311,8 @@ def show_help() -> None:
             "- Positive smoothing uses Max Influences 5, or fewer when the joint "
             "list contains fewer than five influences.\n"
             "- Bind Skin: create the initial skinCluster from all listed joints.\n"
-            "- Add Influence: add selected pending influences to an existing skin.\n\n"
+            "- Add Influence: calculate final Region ownership for selected pending "
+            "joints and modify only their unlocked claimed rows.\n\n"
             "Component\n"
             "- Flood: select one influence and mesh components.\n\n"
             "Region remains the final blocking authority. Smoothing does not "
