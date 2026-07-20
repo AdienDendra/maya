@@ -1,8 +1,7 @@
-"""Joint-list UI and influence-lock actions for AD Skin Tool v4.2.
+"""Joint-list UI and influence-lock actions.
 
 This module is the single source of truth for the flat Maya ``treeView`` used by
-AD Skin Tool. It intentionally uses the Maya 2023-compatible command contract,
-which is also shared by Maya 2025 and Maya 2026:
+AD Skin Tool. It intentionally uses the Maya-compatible command contract:
 
 - create each item first;
 - configure item-dependent flags in later commands;
@@ -128,8 +127,8 @@ def set_joint_list(joints) -> None:
             bound_paths = set(adapter.influences())
             _TOOL_WINDOW._STATE["skin_cluster"] = adapter.skin_cluster
         except Exception:
-            # Preserve v4.1 artist behaviour: an unavailable read displays rows as
-            # pending instead of aborting the window refresh.
+            # An unavailable read displays rows as pending instead of aborting
+            # the window refresh.
             bound_paths = set()
     _TOOL_WINDOW._STATE["bound_joint_paths"] = bound_paths
 
@@ -157,7 +156,7 @@ def set_joint_list(joints) -> None:
         _TOOL_WINDOW._STATE["joint_item_to_path"][item_id] = joint
         _TOOL_WINDOW._STATE["joint_path_to_item"][joint] = item_id
 
-        # Maya 2023 can resolve item-dependent flags before a new item is fully
+        # Maya can resolve item-dependent flags before a new item is fully
         # registered when they share one command. Keep every phase separate.
         cmds.treeView(
             control,
