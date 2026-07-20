@@ -1,4 +1,4 @@
-"""Component weight smoothing for AD Skin Tool v8.1."""
+"""Topology smoothing for existing component skin weights."""
 
 from dataclasses import dataclass
 from typing import Tuple
@@ -11,11 +11,10 @@ from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.component_selection import collect_selected_mesh_vertices
 from ad_skin_tools.core.influence_lock import locked_influences
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
-from ad_skin_tools.core.undo import undo_chunk
+from ad_skin_tools.core.undoable_skin_weights import apply_undoable_weights
 
 
 np = ensure_numpy()
-
 SMOOTHING_PASS_MULTIPLIER = 2
 
 
@@ -123,11 +122,13 @@ def smooth_skin_weights(
     scope: ComponentSmoothScope,
     smoothing_level: int,
 ) -> ComponentSmoothResult:
-    """Smooth existing skin weights inside the resolved selection scope."""
+    """Smooth current skin weights inside the resolved selection scope."""
 
     level = int(smoothing_level)
     if level < 1 or level > 10:
-        raise ValueError("Component Smooth requires Smoothing Iterations from 1 to 10.")
+        raise ValueError(
+            "Component Smooth requires Smoothing Iterations from 1 to 10."
+        )
 
     selection_before = cmds.ls(selection=True, long=True) or []
     adapter = SkinClusterAdapter.from_mesh(scope.mesh_shape)
@@ -174,26 +175,28 @@ def smooth_skin_weights(
         passes=smoothing_passes,
     )
 
-    mutation_recorded = False
+    command_applied = False
     try:
-        try:
-            with undo_chunk("AD Skin Tool Component Smooth"):
-                if changed_vertex_ids.size:
-                    adapter.set_weights(
-                        changed_vertex_ids,
-                        final_weights[changed_vertex_ids],
-                        normalize=False,
-                    )
-                    mutation_recorded = True
-                    _validate_written_rows(
-                        adapter=adapter,
-                        vertex_ids=changed_vertex_ids,
-                        expected_weights=final_weights[changed_vertex_ids],
-                    )
-        except Exception:
-            if mutation_recorded:
-                _undo_failed_smooth()
-            raise
+        if changed_vertex_ids.size:
+            before_weights = baseline[changed_vertex_ids].copy()
+            after_weights = final_weights[changed_vertex_ids].copy()
+            apply_undoable_weights(
+                skin_cluster=adapter.skin_cluster,
+                mesh_shape=scope.mesh_shape,
+                vertex_ids=changed_vertex_ids,
+                before_weights=before_weights,
+                after_weights=after_weights,
+            )
+            command_applied = True
+            _validate_written_rows(
+                adapter=adapter,
+                vertex_ids=changed_vertex_ids,
+                expected_weights=after_weights,
+            )
+    except Exception:
+        if command_applied:
+            _undo_failed_smooth()
+        raise
     finally:
         _restore_selection(selection_before)
 
@@ -223,7 +226,7 @@ def smooth_skin_weights(
 
 
 def print_component_smooth_report(result: ComponentSmoothResult) -> None:
-    print("\n[AD Skin Tool v8.1 - Component Smooth]")
+    print("\n[AD Skin Tool - Component Smooth]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Whole object:", result.whole_object)
@@ -396,26 +399,26 @@ def _validate_written_rows(
     if not vertex_ids.size:
         return
 
-    stored = adapter.get_weights(vertex_ids)
-    actual = np.asarray(stored.weights, dtype=np.float64)
-    expected = np.asarray(expected_weights, dtype=np.float64)
-    tolerance = max(
-        1e-10,
-        float(np.finfo(np.float64).eps)
-        * max(1, expected.shape[1])
-        * 256.0,
+    actual = np.asarray(
+        adapter.get_weights(vertex_ids).weights,
+        dtype=np.float64,
     )
+    expected = np.asarray(expected_weights, dtype=np.float64)
+    tolerance = 1e-8
 
     if not np.all(np.isfinite(actual)):
         raise RuntimeError("Component Smooth stored non-finite weights.")
+
+    differences = np.abs(actual - expected)
     if not np.allclose(actual, expected, rtol=0.0, atol=tolerance):
         changed_rows = np.where(
-            np.any(np.abs(actual - expected) > tolerance, axis=1)
+            np.any(differences > tolerance, axis=1)
         )[0][:20]
         raise RuntimeError(
             "Component Smooth did not store the calculated weights. "
-            "First vertex IDs: {}".format(
-                vertex_ids[changed_rows].tolist()
+            "Maximum difference: {:.12g}. First vertex IDs: {}".format(
+                float(np.max(differences)),
+                vertex_ids[changed_rows].tolist(),
             )
         )
 
