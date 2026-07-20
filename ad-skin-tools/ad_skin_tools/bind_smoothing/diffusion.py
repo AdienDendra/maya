@@ -19,7 +19,7 @@ from typing import Sequence, Tuple
 import numpy as np
 
 
-DEFAULT_RELAXATION = 0.5
+DEFAULT_RELAXATION = 1.0
 MINIMUM_ITERATIONS = 0
 MAXIMUM_ITERATIONS = 10
 
@@ -78,8 +78,8 @@ def diffuse_hard_ownership(
 
         next = current + relaxation * (neighbour_average - current)
 
-    A value of 0.5 is used for the first v6.0 smoke test. Iteration zero returns
-    the original one-hot matrix exactly.
+    v7.4 uses 1.0 so each pass reaches the complete connected-neighbour average.
+    Iteration zero still returns the original one-hot matrix exactly.
     """
 
     owners = _validate_inputs(
