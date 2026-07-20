@@ -5,6 +5,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 MAYA_VERSION="${MAYA_VERSION:-2023}"
 WINDOWS_PROFILE="${WINDOWS_PROFILE:-}"
+WINDOWS_DOCUMENTS="${WINDOWS_DOCUMENTS:-}"
+
+_to_wsl_path() {
+    local value="$1"
+
+    if printf '%s' "$value" | grep -Eq '^[A-Za-z]:[\\/]'; then
+        wslpath -u "$value" 2>/dev/null || true
+        return
+    fi
+
+    printf '%s\n' "$value"
+}
 
 if [ -z "$WINDOWS_PROFILE" ]; then
     WINDOWS_PROFILE_WINDOWS="$(
@@ -15,11 +27,13 @@ if [ -z "$WINDOWS_PROFILE" ]; then
 
     if [ -z "$WINDOWS_PROFILE_WINDOWS" ] || [ "$WINDOWS_PROFILE_WINDOWS" = "%USERPROFILE%" ]; then
         echo "ERROR: Unable to detect the Windows profile directory."
-        echo "Run with: WINDOWS_PROFILE=/mnt/c/Users/<profile> ./deploy_to_maya.sh"
+        echo "Run with: WINDOWS_PROFILE=/mnt/c/Users/<profile> ./tools/deploy_to_maya.sh"
         exit 1
     fi
 
-    WINDOWS_PROFILE="$(wslpath -u "$WINDOWS_PROFILE_WINDOWS" 2>/dev/null || true)"
+    WINDOWS_PROFILE="$(_to_wsl_path "$WINDOWS_PROFILE_WINDOWS")"
+else
+    WINDOWS_PROFILE="$(_to_wsl_path "$WINDOWS_PROFILE")"
 fi
 
 if [ -z "$WINDOWS_PROFILE" ] || [ ! -d "$WINDOWS_PROFILE" ]; then
@@ -27,8 +41,50 @@ if [ -z "$WINDOWS_PROFILE" ] || [ ! -d "$WINDOWS_PROFILE" ]; then
     exit 1
 fi
 
+# Windows can redirect the Documents known folder into OneDrive. Ask Windows for
+# the authoritative location instead of assuming USERPROFILE/Documents.
+if [ -z "$WINDOWS_DOCUMENTS" ] && command -v powershell.exe >/dev/null 2>&1; then
+    WINDOWS_DOCUMENTS_WINDOWS="$(
+        powershell.exe \
+            -NoProfile \
+            -NonInteractive \
+            -Command \
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Environment]::GetFolderPath('MyDocuments')" \
+            2>/dev/null \
+            | tr -d '\r\n' \
+            || true
+    )"
+
+    if [ -n "$WINDOWS_DOCUMENTS_WINDOWS" ]; then
+        WINDOWS_DOCUMENTS="$(_to_wsl_path "$WINDOWS_DOCUMENTS_WINDOWS")"
+    fi
+elif [ -n "$WINDOWS_DOCUMENTS" ]; then
+    WINDOWS_DOCUMENTS="$(_to_wsl_path "$WINDOWS_DOCUMENTS")"
+fi
+
+# Fallbacks cover standard local Documents and common personal/company OneDrive
+# directory names when PowerShell is unavailable.
+if [ -z "$WINDOWS_DOCUMENTS" ] || [ ! -d "$WINDOWS_DOCUMENTS" ]; then
+    WINDOWS_DOCUMENTS=""
+    for candidate in \
+        "$WINDOWS_PROFILE"/OneDrive*/Documents \
+        "$WINDOWS_PROFILE/Documents"
+    do
+        if [ -d "$candidate" ]; then
+            WINDOWS_DOCUMENTS="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$WINDOWS_DOCUMENTS" ] || [ ! -d "$WINDOWS_DOCUMENTS" ]; then
+    echo "ERROR: Unable to locate the Windows Documents directory."
+    echo "Run with an explicit path, for example:"
+    echo "WINDOWS_DOCUMENTS=/mnt/c/Users/adien/OneDrive/Documents ./tools/deploy_to_maya.sh"
+    exit 1
+fi
+
 PACKAGE_SRC="$REPO/ad_skin_tools"
-WINDOWS_DOCUMENTS="$WINDOWS_PROFILE/Documents"
 SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
 DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
@@ -39,15 +95,16 @@ CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
 
 echo "Deploying AD Skin Tools..."
-echo "Repository:      $REPO"
-echo "Git branch:      ${CURRENT_BRANCH:-<unknown>}"
-echo "Git commit:      ${CURRENT_COMMIT:-<unknown>}"
-echo "Windows profile: $WINDOWS_PROFILE"
-echo "Maya version:    $MAYA_VERSION"
-echo "Package to:      $PACKAGE_DST"
+echo "Repository:        $REPO"
+echo "Git branch:        ${CURRENT_BRANCH:-<unknown>}"
+echo "Git commit:        ${CURRENT_COMMIT:-<unknown>}"
+echo "Windows profile:   $WINDOWS_PROFILE"
+echo "Windows Documents: $WINDOWS_DOCUMENTS"
+echo "Maya version:      $MAYA_VERSION"
+echo "Package to:        $PACKAGE_DST"
 
-if [ ! -d "$PACKAGE_SRC" ] || [ ! -d "$WINDOWS_DOCUMENTS" ]; then
-    echo "ERROR: source package or Windows Documents directory is unavailable."
+if [ ! -d "$PACKAGE_SRC" ]; then
+    echo "ERROR: source package is unavailable: $PACKAGE_SRC"
     exit 1
 fi
 
@@ -127,7 +184,7 @@ rm -f \
 cp "$DIAGNOSTIC_SRC" "$DIAGNOSTIC_DST"
 
 echo
-echo "Other ad_skin_tools copies under the Maya documents directory:"
+echo "Other ad_skin_tools copies under the Maya Documents directory:"
 find "$WINDOWS_DOCUMENTS/maya" \
     -type d \
     -name ad_skin_tools \
