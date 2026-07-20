@@ -1,11 +1,17 @@
 import importlib
 
 
-def _install_ui(tool_window, skin_operations, smoothing_bind_section):
+def _install_ui(
+    tool_window,
+    skin_operations,
+    smoothing_bind_section,
+    component_flood_v80,
+):
     """Install the active AD Skin Tool operation UI."""
 
     skin_operations.install(tool_window)
     smoothing_bind_section.install(tool_window, skin_operations)
+    component_flood_v80.install(tool_window)
 
 
 def reload_modules():
@@ -21,6 +27,9 @@ def reload_modules():
     import ad_skin_tools.core.smoothed_automatic_bind as smoothed_automatic_bind
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.add_influence as add_influence
+
+    import ad_skin_tools.components.selection as weighted_component_selection
+    import ad_skin_tools.components.flood as weighted_component_flood
 
     import ad_skin_tools.region.maya_scene as region_maya_scene
     import ad_skin_tools.region.distance_ranking as region_distance_ranking
@@ -43,6 +52,7 @@ def reload_modules():
     import ad_skin_tools.ui.component_flood_section as component_flood_section
     import ad_skin_tools.ui.skin_operations as skin_operations
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
+    import ad_skin_tools.ui.component_flood_v80 as component_flood_v80
     import ad_skin_tools.ui.tool_window as tool_window
 
     for module in [
@@ -54,6 +64,8 @@ def reload_modules():
         component_selection,
         influence_lock,
         component_flood,
+        weighted_component_selection,
+        weighted_component_flood,
         region_maya_scene,
         region_distance_ranking,
         region_exact_tie,
@@ -80,15 +92,31 @@ def reload_modules():
     importlib.reload(component_flood_section)
     importlib.reload(skin_operations)
     importlib.reload(smoothing_bind_section)
+    importlib.reload(component_flood_v80)
     importlib.reload(tool_window)
-    _install_ui(tool_window, skin_operations, smoothing_bind_section)
+    _install_ui(
+        tool_window,
+        skin_operations,
+        smoothing_bind_section,
+        component_flood_v80,
+    )
 
 
 def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
-    from ad_skin_tools.ui import skin_operations, smoothing_bind_section, tool_window
+    from ad_skin_tools.ui import (
+        component_flood_v80,
+        skin_operations,
+        smoothing_bind_section,
+        tool_window,
+    )
 
-    _install_ui(tool_window, skin_operations, smoothing_bind_section)
+    _install_ui(
+        tool_window,
+        skin_operations,
+        smoothing_bind_section,
+        component_flood_v80,
+    )
     tool_window.show(auto_refresh=auto_refresh)
