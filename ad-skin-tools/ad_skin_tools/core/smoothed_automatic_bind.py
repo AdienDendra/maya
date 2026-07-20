@@ -1,4 +1,4 @@
-"""Production v7.3 bind: final v3.2 blocking followed by optional smoothing."""
+"""Production v7.4 bind: final v3.2 blocking followed by optional smoothing."""
 
 from dataclasses import dataclass
 import time
@@ -136,7 +136,7 @@ def bind_object_automatic_surface(
 
     adapter = None
     try:
-        with undo_chunk("AD Skin Tool v7.3 Bind Skin"):
+        with undo_chunk("AD Skin Tool v7.4 Bind Skin"):
             adapter = create_closest_skin_cluster(
                 mesh_shape=region_result.mesh_shape,
                 mesh_transform=region_result.mesh_transform,
@@ -205,7 +205,7 @@ def bind_object_automatic_surface(
 
 
 def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
-    print("\n[AD Skin Tool v7.3 - Final Blocking + Smoothing Bind]")
+    print("\n[AD Skin Tool v7.4 - Final Blocking + Smoothing Bind]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Vertices:", result.vertex_count)
@@ -299,7 +299,7 @@ def _validate_stored_weights(adapter, expected, maximum_influences):
             )
         )[0][:20]
         raise RuntimeError(
-            "Maya stored weights differ from the v7.3 matrix. Maximum "
+            "Maya stored weights differ from the v7.4 matrix. Maximum "
             "difference: {}. First vertex IDs: {}".format(
                 maximum_difference,
                 bad.tolist(),
