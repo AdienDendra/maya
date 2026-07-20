@@ -46,6 +46,8 @@ V310K_DISTANCE_TIEBREAK_BIND_SRC="$REPO/scripts/test_region_ambiguous_loop_dista
 V310K_DISTANCE_TIEBREAK_BIND_DST="$SCRIPT_DST_DIR/test_region_ambiguous_loop_distance_tiebreak_bind.py"
 V32_EXACT_TIE_BIND_SRC="$REPO/scripts/test_v32_exact_tie_region_bind.py"
 V32_EXACT_TIE_BIND_DST="$SCRIPT_DST_DIR/test_v32_exact_tie_region_bind.py"
+V73_SMOOTHING_BIND_SRC="$REPO/scripts/test_v73_bind_smoothing.py"
+V73_SMOOTHING_BIND_DST="$SCRIPT_DST_DIR/test_v73_bind_smoothing.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -65,7 +67,13 @@ fi
 
 required_files=(
     "$PACKAGE_SRC/bind_smoothing/__init__.py"
+    "$PACKAGE_SRC/bind_smoothing/cutoff_projection.py"
     "$PACKAGE_SRC/bind_smoothing/diffusion.py"
+    "$PACKAGE_SRC/bind_smoothing/final_constraints.py"
+    "$PACKAGE_SRC/bind_smoothing/max_influences.py"
+    "$PACKAGE_SRC/bind_smoothing/options.py"
+    "$PACKAGE_SRC/bind_smoothing/solver.py"
+    "$PACKAGE_SRC/bind_smoothing/validation.py"
     "$PACKAGE_SRC/core/add_influence.py"
     "$PACKAGE_SRC/core/automatic_surface_commands.py"
     "$PACKAGE_SRC/core/component_flood.py"
@@ -103,6 +111,7 @@ required_diagnostics=(
     "$V310J_OPPOSITE_GUARD_BIND_SRC"
     "$V310K_DISTANCE_TIEBREAK_BIND_SRC"
     "$V32_EXACT_TIE_BIND_SRC"
+    "$V73_SMOOTHING_BIND_SRC"
 )
 
 for required_diagnostic in "${required_diagnostics[@]}"; do
@@ -134,12 +143,14 @@ rm -f \
     "$SCRIPT_DST_DIR/test_region_closed_loop_ambiguous_neighbor_bind.py" \
     "$SCRIPT_DST_DIR/test_region_loop_axis_guarded_bind.py" \
     "$SCRIPT_DST_DIR/test_region_ambiguous_loop_neighbour_bind.py" \
+    "$SCRIPT_DST_DIR/test_v70_blocking_smoothing_bind.py" \
     "$V60_DIFFUSION_DIAGNOSTIC_DST" \
     "$V310C_COLOR_FEEDBACK_DST" \
     "$V310D_CLOSED_LOOP_BIND_DST" \
     "$V310J_OPPOSITE_GUARD_BIND_DST" \
     "$V310K_DISTANCE_TIEBREAK_BIND_DST" \
-    "$V32_EXACT_TIE_BIND_DST"
+    "$V32_EXACT_TIE_BIND_DST" \
+    "$V73_SMOOTHING_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
@@ -148,6 +159,7 @@ cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
 cp "$V310J_OPPOSITE_GUARD_BIND_SRC" "$V310J_OPPOSITE_GUARD_BIND_DST"
 cp "$V310K_DISTANCE_TIEBREAK_BIND_SRC" "$V310K_DISTANCE_TIEBREAK_BIND_DST"
 cp "$V32_EXACT_TIE_BIND_SRC" "$V32_EXACT_TIE_BIND_DST"
+cp "$V73_SMOOTHING_BIND_SRC" "$V73_SMOOTHING_BIND_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -166,4 +178,5 @@ echo "v3.10D closed-loop baseline runner: $V310D_CLOSED_LOOP_BIND_DST"
 echo "v3.10J opposite-guard runner: $V310J_OPPOSITE_GUARD_BIND_DST"
 echo "v3.10K ambiguous distance tie-break runner: $V310K_DISTANCE_TIEBREAK_BIND_DST"
 echo "v3.2 exact-tie Region runner: $V32_EXACT_TIE_BIND_DST"
+echo "v7.3 smoothing runner: $V73_SMOOTHING_BIND_DST"
 echo "Done."
