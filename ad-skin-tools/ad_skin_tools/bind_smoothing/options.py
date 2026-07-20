@@ -3,12 +3,12 @@
 from dataclasses import dataclass
 
 from ad_skin_tools.bind_smoothing.diffusion import (
-    DEFAULT_RELAXATION,
     MAXIMUM_ITERATIONS,
     MINIMUM_ITERATIONS,
 )
 
 
+DEFAULT_RELAXATION = 1.0
 DEFAULT_MAXIMUM_INFLUENCES = 5
 DEFAULT_WEIGHT_EPSILON = 1e-12
 
