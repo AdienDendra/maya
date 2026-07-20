@@ -34,7 +34,7 @@ class GeometricMaxInfluenceResult:
 
     @property
     def unresolved_exact_tie_vertex_ids(self) -> Tuple[int, ...]:
-        """Compatibility alias for the old v7.0 diagnostic name."""
+        """Compatibility alias for unresolved coincident cutoff rows."""
 
         return self.unresolved_coincident_vertex_ids
 
@@ -56,11 +56,10 @@ def enforce_maximum_influences_by_geometry(
     2. smaller squared vertex-to-joint distance;
     3. lexicographically smaller joint world position.
 
-    The third key is the same kind of spatial-canonical fallback used by the
-    v3.2 Region exact-tie stage. It is independent from influence list order.
-    A row remains unresolved only when the cutoff would split candidates whose
-    weight, distance, and world position are all exactly identical. That means
-    the candidate joints are geometrically indistinguishable at this stage.
+    The third key is a spatial-canonical fallback independent from influence
+    list order. A row remains unresolved only when the cutoff would split
+    candidates whose weight, distance, and world position are all exactly
+    identical. Those joints are geometrically indistinguishable at this stage.
     """
 
     matrix, owners = _validated_weight_inputs(weights, owner_indices)
