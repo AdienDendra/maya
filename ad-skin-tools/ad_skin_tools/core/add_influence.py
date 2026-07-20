@@ -182,7 +182,7 @@ def add_influences_by_region(
 
 
 def print_report(result: AddInfluenceResult) -> None:
-    print("\n[AD Skin Tool v7.3 - Add Influence]")
+    print("\n[AD Skin Tool - Add Influence]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("New influences:", len(result.target_joints))
@@ -357,7 +357,9 @@ def _validate_write(
     actual = weights[claimed_ids]
     difference = np.abs(actual - expected_claimed)
     if np.any(difference > STORED_WEIGHT_TOLERANCE):
-        bad = np.where(np.any(difference > STORED_WEIGHT_TOLERANCE, axis=1))[0][:20]
+        bad = np.where(
+            np.any(difference > STORED_WEIGHT_TOLERANCE, axis=1)
+        )[0][:20]
         raise RuntimeError(
             "Stored Add Influence weights differ from the local solve. First IDs: {}"
             .format(claimed_ids[bad].tolist())
