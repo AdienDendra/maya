@@ -1,3 +1,5 @@
+"""Base Maya workspace window and shared UI state."""
+
 import builtins
 import traceback
 
@@ -10,9 +12,9 @@ from ad_skin_tools.core.skin_cluster import SkinClusterAdapter, SkinClusterError
 
 
 WINDOW_NAME = "ADSkinWeightsToolWorkspace"
-WINDOW_LABEL = "AD Skin Weights Tool v2.7"
+WINDOW_LABEL = "AD Skin Weights Tool"
 WINDOW_WIDTH = 340
-WINDOW_HEIGHT = 610
+WINDOW_HEIGHT = 665
 
 BUTTON_HEIGHT = 28
 ROW_HEIGHT = 26
@@ -44,6 +46,8 @@ _STATE = {
 
 
 def show(auto_refresh=False):
+    """Create the tool workspace after operation modules install their hooks."""
+
     _delete_existing_workspace()
 
     cmds.workspaceControl(
@@ -102,6 +106,8 @@ def _build_header():
 
 
 def _build_skin_cluster_section():
+    """Default mesh-context section replaced by the active UI installer."""
+
     cmds.frameLayout(
         label="Mesh / Skin Context",
         collapsable=True,
@@ -124,7 +130,7 @@ def _build_skin_cluster_section():
     cmds.text(CTRL_JOINT_LABEL, label="Joints: 0", align="left")
 
     _button_row(
-        [("Load Mesh / Skin", lambda *_: load_skin_weight())],
+        [("Load Mesh", lambda *_: load_skin_weight())],
         height=30,
     )
 
@@ -133,6 +139,8 @@ def _build_skin_cluster_section():
 
 
 def _build_joints_section():
+    """Default joint list replaced by the active joint-list module."""
+
     cmds.frameLayout(
         label="Joints / Influences",
         collapsable=True,
@@ -170,8 +178,10 @@ def _build_joints_section():
 
 
 def _build_initial_bind_section():
+    """Default bind section replaced by the active operation modules."""
+
     cmds.frameLayout(
-        label="Initial Bind",
+        label="Binding",
         collapsable=True,
         collapse=False,
         marginWidth=6,
@@ -179,46 +189,19 @@ def _build_initial_bind_section():
     )
     cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
 
-    cmds.text(
-        label="Automatic Surface",
-        align="left",
-        font="boldLabelFont",
-    )
-    cmds.text(
-        label=(
-            "Automatically calculates seeds and floods hard ownership across "
-            "all connected and disconnected surface components."
-        ),
-        align="left",
-        wordWrap=True,
-    )
     cmds.button(
         CTRL_BIND_BUTTON,
-        label="Bind Automatic Surface",
+        label="Bind Skin",
         height=38,
         command=lambda *_: apply_operation(),
-        annotation=(
-            "Bind the loaded unskinned mesh using all joints in the influence "
-            "list. No fallback joint or shell assignment is required."
-        ),
     )
-
     _create_bind_progress_bar()
-
     cmds.text(
         CTRL_BIND_STATUS,
         label="",
         align="left",
         wordWrap=True,
         visible=False,
-    )
-    cmds.text(
-        label=(
-            "v2.7 writes one influence at weight 1.0 per vertex. Smoothing "
-            "and soft transitions will be introduced in v2.8."
-        ),
-        align="left",
-        wordWrap=True,
     )
 
     cmds.setParent("..")
@@ -246,6 +229,8 @@ def _create_bind_progress_bar():
 
 
 def load_skin_weight(silent=False):
+    """Load one selected polygon mesh and its current skin context."""
+
     try:
         _require_not_busy()
         mesh_selection = get_selected_mesh_object()
@@ -306,6 +291,8 @@ def refresh_from_selection(silent=False):
 
 
 def _sync_loaded_skin_context():
+    """Refresh the loaded skinCluster and influence list after an operation."""
+
     mesh_shape = _STATE.get("mesh_shape")
     mesh_transform = _STATE.get("mesh_transform")
 
@@ -340,16 +327,11 @@ def _sync_loaded_skin_context():
 
 
 def add_selected_joints():
+    """Fallback joint-list callback replaced by the active joint-list module."""
+
     try:
         _require_not_busy()
         _require_loaded_mesh()
-
-        if _STATE.get("has_skin_cluster"):
-            raise RuntimeError(
-                "This mesh already has a skinCluster. The influence list "
-                "is read from the existing skinCluster."
-            )
-
         selected_joints = get_selected_joints()
         if not selected_joints:
             cmds.warning("No selected joints found.")
@@ -357,7 +339,6 @@ def add_selected_joints():
 
         current_joints = builtins.list(_STATE.get("joints", []))
         added = []
-
         for joint in selected_joints:
             normalized = _normalize_joint_path(joint)
             if not _joint_exists_in_list(normalized, current_joints):
@@ -366,7 +347,6 @@ def add_selected_joints():
 
         _set_joint_list(current_joints)
         _update_joint_count_label()
-
         if added:
             _info("Added {} joint(s).".format(builtins.len(added)))
         else:
@@ -376,10 +356,11 @@ def add_selected_joints():
 
 
 def remove_selected_joints():
+    """Fallback removal callback replaced by the active joint-list module."""
+
     try:
         _require_not_busy()
         _require_unskinned_mesh()
-
         labels = cmds.textScrollList(
             CTRL_JOINT_LIST,
             query=True,
@@ -399,15 +380,9 @@ def remove_selected_joints():
         }
         current_joints = builtins.list(_STATE.get("joints", []))
         remaining = [
-            joint
-            for joint in current_joints
-            if joint not in selected_paths
+            joint for joint in current_joints if joint not in selected_paths
         ]
-
-        removed_count = (
-            builtins.len(current_joints)
-            - builtins.len(remaining)
-        )
+        removed_count = len(current_joints) - len(remaining)
         _set_joint_list(remaining)
         _update_joint_count_label()
         _info("Removed {} joint(s).".format(removed_count))
@@ -416,6 +391,8 @@ def remove_selected_joints():
 
 
 def remove_all_joints():
+    """Fallback clear callback replaced by the active joint-list module."""
+
     try:
         _require_not_busy()
         _require_unskinned_mesh()
@@ -427,13 +404,23 @@ def remove_all_joints():
 
 
 def show_selected_joints_in_list():
+    """Fallback selection callback replaced by the active joint-list module."""
+
     try:
         _require_not_busy()
         _require_loaded_mesh()
-
         selected_joints = get_selected_joints()
         if not selected_joints:
             cmds.warning("No selected joints found in Maya.")
+            return
+
+        labels = [
+            _display_label_from_path(joint)
+            for joint in selected_joints
+        ]
+        labels = [label for label in labels if label]
+        if not labels:
+            cmds.warning("Selected joints were not found in the tool list.")
             return
 
         cmds.textScrollList(
@@ -441,62 +428,21 @@ def show_selected_joints_in_list():
             edit=True,
             deselectAll=True,
         )
-        all_items = cmds.textScrollList(
-            CTRL_JOINT_LIST,
-            query=True,
-            allItems=True,
-        ) or []
-
-        matched_labels = [
-            label
-            for label in (
-                _display_label_from_path(joint)
-                for joint in selected_joints
-            )
-            if label
-        ]
-        if not matched_labels:
-            cmds.warning(
-                "Selected joints were not found in the tool list."
-            )
-            return
-
-        first_index = None
-        for label in matched_labels:
+        for label in labels:
             cmds.textScrollList(
                 CTRL_JOINT_LIST,
                 edit=True,
                 selectItem=label,
             )
-            if label in all_items and first_index is None:
-                first_index = all_items.index(label) + 1
-
-        if first_index is not None:
-            cmds.textScrollList(
-                CTRL_JOINT_LIST,
-                edit=True,
-                showIndexedItem=first_index,
-            )
-
-        _info(
-            "Found {} selected joint(s) in the list.".format(
-                builtins.len(matched_labels)
-            )
-        )
+        _info("Found {} selected joint(s) in the list.".format(len(labels)))
     except Exception as exc:
         _show_error(exc)
 
 
 def apply_operation():
-    """
-    Run v2.7 on Maya's main thread while presenting an explicit busy state.
+    """Fallback bind callback replaced by the active smoothing bind module."""
 
-    Maya geometry and skin APIs are not moved into a worker thread. The UI is
-    repainted before the synchronous solver begins so a long solve does not
-    look like an ignored button click.
-    """
     wait_cursor_active = False
-
     try:
         _require_not_busy()
         _require_unskinned_mesh()
@@ -504,14 +450,11 @@ def apply_operation():
         joints = builtins.list(_STATE.get("joints", []))
         if builtins.len(joints) < 2:
             raise RuntimeError(
-                "Automatic Surface bind requires at least two joints.\n\n"
-                "Select joints in Maya and click Add Selected."
+                "Bind Skin requires at least two joints.\n\n"
+                "Select joints in Maya and add them to the list."
             )
 
-        _set_bind_busy(
-            True,
-            "Calculating seeds and flooding surface ownership...",
-        )
+        _set_bind_busy(True, "Calculating surface ownership...")
         cmds.waitCursor(state=True)
         wait_cursor_active = True
         cmds.refresh(force=True)
@@ -522,13 +465,9 @@ def apply_operation():
         )
 
         _sync_loaded_skin_context()
-        builtins.AD_SKIN_V27_RESULT = result
+        builtins.AD_SKIN_BIND_RESULT = result
         automatic_surface_commands.print_report(result)
-
-        _info(
-            "Automatic Surface bind complete: {} vertices, exactly one "
-            "influence per vertex.".format(result.vertex_count)
-        )
+        _info("Bind complete: {} vertices.".format(result.vertex_count))
     except Exception as exc:
         _show_error(exc)
     finally:
@@ -548,14 +487,7 @@ def _set_bind_busy(busy, status=""):
             CTRL_BIND_BUTTON,
             edit=True,
             enable=not busy,
-            label="Binding..." if busy else "Bind Automatic Surface",
-        )
-
-    if cmds.textScrollList(CTRL_JOINT_LIST, exists=True):
-        cmds.textScrollList(
-            CTRL_JOINT_LIST,
-            edit=True,
-            enable=not busy,
+            label="Binding..." if busy else "Bind Skin",
         )
 
     if cmds.progressBar(CTRL_BIND_PROGRESS, exists=True):
@@ -589,24 +521,11 @@ def _set_bind_busy(busy, status=""):
 
 def show_help():
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v2.7",
+        title="AD Skin Weights Tool",
         message=(
-            "Automatic Surface Workflow:\n\n"
-            "1. Select an unskinned mesh.\n"
-            "2. Click Load Mesh / Skin.\n"
-            "3. Select every intended bind joint in Maya.\n"
-            "4. Click Add Selected.\n"
-            "5. Click Bind Automatic Surface.\n\n"
-            "The solver automatically:\n"
-            "- discovers radial surface seeds where available;\n"
-            "- keeps all listed joints active;\n"
-            "- evaluates every topology component against every joint;\n"
-            "- floods ownership using weighted surface distance;\n"
-            "- writes one influence at weight 1.0 per vertex.\n\n"
-            "No fallback joint, shell-joint list, body-part mapping, or "
-            "left/right rule is required.\n\n"
-            "v2.7 does not perform smoothing or soft transitions. "
-            "Those stages belong to v2.8."
+            "Load one polygon mesh, add the intended joints, then use the "
+            "Binding or Component operations. Locked influence values are "
+            "preserved by operations that support existing skin weights."
         ),
         button=["OK"],
     )
@@ -622,15 +541,13 @@ def show_environment_report():
 
 def _require_not_busy():
     if _STATE.get("busy"):
-        raise RuntimeError(
-            "Automatic Surface binding is already running."
-        )
+        raise RuntimeError("An AD Skin Tool operation is already running.")
 
 
 def _require_loaded_mesh():
     if not _STATE.get("mesh_shape"):
         raise RuntimeError(
-            "No mesh loaded. Select a mesh and click Load Mesh / Skin."
+            "No mesh loaded. Select a mesh and click Load Mesh."
         )
 
 
@@ -649,20 +566,22 @@ def _set_option_menu_items(menu_name, items):
         query=True,
         itemListLong=True,
     ) or []
-
     for item in existing_items:
         cmds.deleteUI(item)
-
     for item in items:
         cmds.menuItem(label=item, parent=menu_name)
 
 
 def _set_joint_list(joints):
+    """Default text-list renderer replaced by the active joint-list module."""
+
     normalized_joints = _unique_joint_paths(joints)
     _STATE["joints"] = normalized_joints
     _STATE["joint_display_to_path"] = {}
     _STATE["joint_path_to_display"] = {}
 
+    if not cmds.textScrollList(CTRL_JOINT_LIST, exists=True):
+        return
     cmds.textScrollList(
         CTRL_JOINT_LIST,
         edit=True,
@@ -681,6 +600,8 @@ def _set_joint_list(joints):
 
 
 def _update_joint_count_label():
+    if not cmds.text(CTRL_JOINT_LABEL, exists=True):
+        return
     cmds.text(
         CTRL_JOINT_LABEL,
         edit=True,
@@ -706,14 +627,12 @@ def _normalize_joint_path(joint):
 def _unique_joint_paths(joints):
     result = []
     seen = set()
-
     for joint in joints:
         normalized = _normalize_joint_path(joint)
         if normalized in seen:
             continue
         seen.add(normalized)
         result.append(normalized)
-
     return result
 
 
@@ -731,7 +650,6 @@ def _make_unique_joint_label(joint, all_joints):
         )
         if count == 1:
             return label
-
     return joint
 
 
@@ -777,7 +695,6 @@ def _label_control_row(label, control_builder, height=ROW_HEIGHT):
             (control, "left", CONTROL_GAP, label_control)
         ],
     )
-
     cmds.setParent("..")
     return control
 
@@ -788,7 +705,6 @@ def _button_row(buttons, height=BUTTON_HEIGHT, gap=BUTTON_GAP):
         height=height,
     )
     count = builtins.len(buttons)
-
     if count == 0:
         cmds.setParent("..")
         return layout
