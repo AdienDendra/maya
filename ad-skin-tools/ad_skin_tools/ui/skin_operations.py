@@ -1,11 +1,10 @@
-"""Compact Maya-centric binding and component operation UI."""
+"""Binding and component operation UI."""
 
 import builtins
 
 import maya.cmds as cmds
 
 from ad_skin_tools.core import add_influence
-from ad_skin_tools.ui import component_flood_section
 from ad_skin_tools.ui import joint_list
 
 
@@ -15,23 +14,68 @@ _TOOL_WINDOW = None
 
 
 def install(tool_window_module) -> None:
-    """Install existing behaviour, then replace the operation UI."""
+    """Configure the active skin operation UI."""
 
     global _TOOL_WINDOW
     _TOOL_WINDOW = tool_window_module
 
-    component_flood_section.install(tool_window_module)
+    joint_list.configure(tool_window_module)
 
+    tool_window_module._build_skin_cluster_section = _build_skin_cluster_section
+    tool_window_module._build_joints_section = joint_list.build_section
     tool_window_module._build_initial_bind_section = _build_operation_sections
+    tool_window_module._set_joint_list = joint_list.set_joint_list
+    tool_window_module.add_selected_joints = joint_list.add_selected_joints
+    tool_window_module.remove_selected_joints = joint_list.remove_selected_joints
+    tool_window_module.remove_all_joints = joint_list.remove_all_joints
+    tool_window_module.show_selected_joints_in_list = (
+        joint_list.show_selected_joints_in_list
+    )
     tool_window_module._set_bind_busy = _set_bind_busy
     tool_window_module.show_help = show_help
 
-    component_flood_section._set_flood_busy = _set_flood_busy
-
-    tool_window_module.WINDOW_LABEL = "AD Skin Weights Tool v5.0"
-    tool_window_module.WINDOW_HEIGHT = 650
+    tool_window_module.WINDOW_LABEL = "AD Skin Weights Tool"
+    tool_window_module.WINDOW_HEIGHT = 665
     tool_window_module.WINDOW_WIDTH = 340
-    tool_window_module._SKIN_OPERATIONS_UI_INSTALLED = True
+
+
+def _build_skin_cluster_section() -> None:
+    cmds.frameLayout(
+        label="Mesh / Skin Context",
+        collapsable=True,
+        collapse=False,
+        marginWidth=6,
+        marginHeight=6,
+    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+
+    _TOOL_WINDOW._label_control_row(
+        "Skin Cluster",
+        lambda: cmds.optionMenu(_TOOL_WINDOW.CTRL_SKIN_MENU),
+    )
+    cmds.text(
+        _TOOL_WINDOW.CTRL_MESH_LABEL,
+        label="Mesh: <none>",
+        align="left",
+    )
+    cmds.text(
+        _TOOL_WINDOW.CTRL_MODE_LABEL,
+        label="Mode: No object loaded",
+        align="left",
+    )
+    cmds.text(
+        _TOOL_WINDOW.CTRL_JOINT_LABEL,
+        label="Joints: 0",
+        align="left",
+    )
+
+    _TOOL_WINDOW._button_row(
+        [("Load Mesh", lambda *_: _TOOL_WINDOW.load_skin_weight())],
+        height=30,
+    )
+
+    cmds.setParent("..")
+    cmds.setParent("..")
 
 
 def _build_operation_sections() -> None:
@@ -79,35 +123,9 @@ def _build_binding_section() -> None:
 
 
 def _build_component_section() -> None:
-    cmds.frameLayout(
-        label="Component",
-        collapsable=True,
-        collapse=False,
-        marginWidth=6,
-        marginHeight=6,
-    )
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
+    from ad_skin_tools.ui import component_section
 
-    _named_button_row(
-        [
-            (
-                component_flood_section.CTRL_FLOOD_BUTTON,
-                "Flood",
-                lambda *_: component_flood_section.apply_component_flood(),
-            ),
-        ],
-        height=38,
-    )
-    cmds.text(
-        component_flood_section.CTRL_FLOOD_STATUS,
-        label="",
-        align="left",
-        wordWrap=True,
-        visible=False,
-    )
-
-    cmds.setParent("..")
-    cmds.setParent("..")
+    component_section.build_section()
 
 
 def apply_add_influence() -> None:
@@ -131,7 +149,8 @@ def apply_add_influence() -> None:
             )
 
         locked_targets = [
-            joint for joint in targets
+            joint
+            for joint in targets
             if joint_list.joint_is_locked(joint)
         ]
         if locked_targets:
@@ -140,7 +159,9 @@ def apply_add_influence() -> None:
                 .format("\n".join(locked_targets))
             )
 
-        staged_joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+        staged_joints = builtins.list(
+            _TOOL_WINDOW._STATE.get("joints", [])
+        )
         staged_locks = set(
             _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
         )
@@ -212,38 +233,14 @@ def _set_add_influence_busy(busy, status="") -> None:
     _set_progress_status(busy, status)
 
 
-def _set_flood_busy(busy, status="") -> None:
-    if _TOOL_WINDOW is None:
-        return
-
-    _set_common_enabled(not busy)
-    _TOOL_WINDOW._STATE["busy"] = bool(busy)
-
-    control = component_flood_section.CTRL_FLOOD_BUTTON
-    if cmds.button(control, exists=True):
-        cmds.button(
-            control,
-            edit=True,
-            label="Flooding..." if busy else "Flood",
-        )
-
-    status_control = component_flood_section.CTRL_FLOOD_STATUS
-    if cmds.text(status_control, exists=True):
-        cmds.text(
-            status_control,
-            edit=True,
-            label=status if busy else "",
-            visible=bool(busy),
-        )
-
-    _refresh()
-
-
 def _set_common_enabled(enabled) -> None:
+    from ad_skin_tools.ui import component_section
+
     for control in (
         _TOOL_WINDOW.CTRL_BIND_BUTTON,
         CTRL_ADD_INFLUENCE_BUTTON,
-        component_flood_section.CTRL_FLOOD_BUTTON,
+        component_section.CTRL_FLOOD_BUTTON,
+        component_section.CTRL_SMOOTH_BUTTON,
     ):
         if cmds.button(control, exists=True):
             cmds.button(control, edit=True, enable=bool(enabled))
@@ -325,15 +322,15 @@ def _refresh() -> None:
 
 def show_help() -> None:
     cmds.confirmDialog(
-        title="AD Skin Weights Tool v5.0",
+        title="AD Skin Weights Tool",
         message=(
             "Binding\n"
-            "- Bind Skin: bind an unskinned loaded mesh using all listed joints.\n"
-            "- Add Influence: select pending joints in the list and calculate "
-            "their Region ownership on the existing skinCluster.\n\n"
+            "- Bind Skin binds an unskinned loaded mesh using all listed joints.\n"
+            "- Add Influence calculates Region ownership for selected pending joints.\n\n"
             "Component\n"
-            "- Flood: select one joint in the list, then select mesh components.\n\n"
-            "Locked influences keep their existing ownership."
+            "- Flood assigns selected mesh components to one selected influence.\n"
+            "- Smooth diffuses existing weights inside the selected scope.\n\n"
+            "Locked influence values remain unchanged."
         ),
         button=["OK"],
     )
