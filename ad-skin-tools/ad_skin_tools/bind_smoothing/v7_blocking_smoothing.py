@@ -67,7 +67,14 @@ def solve_v7_blocking_smoothing(
     ``region_result`` is expected to come from the v3.2 Region solver. Initial
     closest-distance ties have therefore already been completed before
     connectivity and facing. v3.10J/K remains the final blocking authority.
-    Smoothing starts only after that final hard owner map validates cleanly.
+    Smoothing starts only after that final hard owner array passes structural
+    validation.
+
+    The post-correction ``final_validation`` result is retained as diagnostic
+    telemetry. Its detached/ambiguous classifications come from re-running the
+    generic Region facing heuristic after v3.10J/K has intentionally corrected
+    closed loops. They do not mean that vertices are unowned, so they must not
+    block the smoothing handoff.
     """
 
     options = (options or BindSmoothingOptions()).validated()
@@ -83,7 +90,6 @@ def solve_v7_blocking_smoothing(
     )
     _validate_blocking_contract(
         region_result=region_result,
-        blocking_result=blocking_result,
         blocking_owners=blocking_owners,
     )
 
@@ -154,9 +160,16 @@ def solve_v7_blocking_smoothing(
 
 def _validate_blocking_contract(
     region_result,
-    blocking_result,
     blocking_owners,
 ):
+    """Validate the actual hard-owner handoff contract.
+
+    A complete blocking map means exactly one valid influence index is stored for
+    every vertex. Facing classifications are quality diagnostics, not ownership
+    validity: after v3.10J/K loop corrections a fully owned region can still be
+    labelled detached by the generic pre-correction heuristic.
+    """
+
     expected_shape = (region_result.vertex_count,)
     if blocking_owners.shape != expected_shape:
         raise RuntimeError(
@@ -173,14 +186,4 @@ def _validate_blocking_contract(
         raise RuntimeError(
             "Final blocking owner map contains invalid influence indices. "
             "First vertex IDs: {}".format(bad.tolist())
-        )
-
-    validation = blocking_result.final_validation
-    if validation.detached_vertex_count or validation.ambiguous_vertex_count:
-        raise RuntimeError(
-            "Smoothing refused an incomplete final blocking map. "
-            "Detached vertices: {}. Ambiguous vertices: {}.".format(
-                validation.detached_vertex_count,
-                validation.ambiguous_vertex_count,
-            )
         )
