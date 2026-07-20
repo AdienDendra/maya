@@ -44,8 +44,10 @@ V310J_OPPOSITE_GUARD_BIND_SRC="$REPO/scripts/test_region_closed_loop_opposite_gu
 V310J_OPPOSITE_GUARD_BIND_DST="$SCRIPT_DST_DIR/test_region_closed_loop_opposite_guard_bind.py"
 V310K_DISTANCE_TIEBREAK_BIND_SRC="$REPO/scripts/test_region_ambiguous_loop_distance_tiebreak_bind.py"
 V310K_DISTANCE_TIEBREAK_BIND_DST="$SCRIPT_DST_DIR/test_region_ambiguous_loop_distance_tiebreak_bind.py"
-V70_BLOCKING_SMOOTHING_BIND_SRC="$REPO/scripts/test_v70_blocking_smoothing_bind.py"
-V70_BLOCKING_SMOOTHING_BIND_DST="$SCRIPT_DST_DIR/test_v70_blocking_smoothing_bind.py"
+V32_EXACT_TIE_BIND_SRC="$REPO/scripts/test_v32_exact_tie_region_bind.py"
+V32_EXACT_TIE_BIND_DST="$SCRIPT_DST_DIR/test_v32_exact_tie_region_bind.py"
+V71_BLOCKING_SMOOTHING_BIND_SRC="$REPO/scripts/test_v70_blocking_smoothing_bind.py"
+V71_BLOCKING_SMOOTHING_BIND_DST="$SCRIPT_DST_DIR/test_v70_blocking_smoothing_bind.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -65,6 +67,7 @@ fi
 
 required_files=(
     "$PACKAGE_SRC/bind_smoothing/__init__.py"
+    "$PACKAGE_SRC/bind_smoothing/cutoff_projection.py"
     "$PACKAGE_SRC/bind_smoothing/diffusion.py"
     "$PACKAGE_SRC/bind_smoothing/final_constraints.py"
     "$PACKAGE_SRC/bind_smoothing/max_influences.py"
@@ -81,6 +84,7 @@ required_files=(
     "$PACKAGE_SRC/core/opposite_axis.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
     "$PACKAGE_SRC/region/distance_ranking.py"
+    "$PACKAGE_SRC/region/exact_tie.py"
     "$PACKAGE_SRC/region/connectivity.py"
     "$PACKAGE_SRC/region/facing.py"
     "$PACKAGE_SRC/region/solver.py"
@@ -107,7 +111,8 @@ required_diagnostics=(
     "$V310D_CLOSED_LOOP_BIND_SRC"
     "$V310J_OPPOSITE_GUARD_BIND_SRC"
     "$V310K_DISTANCE_TIEBREAK_BIND_SRC"
-    "$V70_BLOCKING_SMOOTHING_BIND_SRC"
+    "$V32_EXACT_TIE_BIND_SRC"
+    "$V71_BLOCKING_SMOOTHING_BIND_SRC"
 )
 
 for required_diagnostic in "${required_diagnostics[@]}"; do
@@ -147,7 +152,8 @@ rm -f \
     "$V310D_CLOSED_LOOP_BIND_DST" \
     "$V310J_OPPOSITE_GUARD_BIND_DST" \
     "$V310K_DISTANCE_TIEBREAK_BIND_DST" \
-    "$V70_BLOCKING_SMOOTHING_BIND_DST"
+    "$V32_EXACT_TIE_BIND_DST" \
+    "$V71_BLOCKING_SMOOTHING_BIND_DST"
 
 cp "$ADD_INFLUENCE_DIAGNOSTIC_SRC" "$ADD_INFLUENCE_DIAGNOSTIC_DST"
 cp "$V60_DIFFUSION_DIAGNOSTIC_SRC" "$V60_DIFFUSION_DIAGNOSTIC_DST"
@@ -155,7 +161,8 @@ cp "$V310C_COLOR_FEEDBACK_SRC" "$V310C_COLOR_FEEDBACK_DST"
 cp "$V310D_CLOSED_LOOP_BIND_SRC" "$V310D_CLOSED_LOOP_BIND_DST"
 cp "$V310J_OPPOSITE_GUARD_BIND_SRC" "$V310J_OPPOSITE_GUARD_BIND_DST"
 cp "$V310K_DISTANCE_TIEBREAK_BIND_SRC" "$V310K_DISTANCE_TIEBREAK_BIND_DST"
-cp "$V70_BLOCKING_SMOOTHING_BIND_SRC" "$V70_BLOCKING_SMOOTHING_BIND_DST"
+cp "$V32_EXACT_TIE_BIND_SRC" "$V32_EXACT_TIE_BIND_DST"
+cp "$V71_BLOCKING_SMOOTHING_BIND_SRC" "$V71_BLOCKING_SMOOTHING_BIND_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya documents directory:"
@@ -173,5 +180,6 @@ echo "v3.10C Region baseline runner: $V310C_COLOR_FEEDBACK_DST"
 echo "v3.10D closed-loop baseline runner: $V310D_CLOSED_LOOP_BIND_DST"
 echo "v3.10J opposite-guard runner: $V310J_OPPOSITE_GUARD_BIND_DST"
 echo "v3.10K ambiguous distance tie-break runner: $V310K_DISTANCE_TIEBREAK_BIND_DST"
-echo "v7.0 blocking-smoothing runner: $V70_BLOCKING_SMOOTHING_BIND_DST"
+echo "v3.2 exact-tie Region runner: $V32_EXACT_TIE_BIND_DST"
+echo "v7.1 exact-tie blocking-smoothing runner: $V71_BLOCKING_SMOOTHING_BIND_DST"
 echo "Done."
