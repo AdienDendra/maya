@@ -1,10 +1,9 @@
-"""Resolve post-v3.10J ambiguous islands with loop support plus distance tie-break.
+"""Resolve ambiguous islands with loop support plus a distance tie-break.
 
-The production Region solver, v3.10D, and v3.10J remain unchanged. This layer
-starts from the v3.10J corrected owner map, finds non-anchor AMBIGUOUS connected
-regions through the existing connectivity/facing logic, and scores neighbouring
-owners only through boundary edges whose outside vertex belongs to a final
-single-owner closed Maya edge loop.
+This layer starts from the guarded corrected owner map, finds non-anchor
+AMBIGUOUS connected regions through the existing connectivity and facing logic,
+and scores neighbouring owners only through boundary edges whose outside vertex
+belongs to a final single-owner closed Maya edge loop.
 
 A unique highest positive loop-support score assigns the island. When several
 neighbours share that score, aggregate squared distance from the whole island to
@@ -112,17 +111,16 @@ def solve_ambiguous_loop_distance_tiebreak(
     """Assign ambiguous islands from loop support, then exact distance tie-break."""
 
     if guarded_result.mesh_shape != region_result.mesh_shape:
-        raise RuntimeError("Region and v3.10J results refer to different meshes.")
+        raise RuntimeError("Region and guarded results refer to different meshes.")
     if guarded_result.influences != region_result.influences:
-        raise RuntimeError("Region and v3.10J influence lists differ.")
+        raise RuntimeError("Region and guarded influence lists differ.")
 
     original = np.asarray(
         guarded_result.corrected_owner_indices,
         dtype=np.int32,
     )
     if original.shape != (region_result.vertex_count,):
-        raise ValueError("v3.10J owner map must contain one owner per vertex.")
-
+        raise ValueError("Guarded owner map must contain one owner per vertex.")
     adjacency = build_vertex_adjacency(region_result.mesh_shape)
     facing_context = build_facing_mesh_context(region_result.mesh_shape)
     vertex_loop_support = _single_owner_loop_support(
