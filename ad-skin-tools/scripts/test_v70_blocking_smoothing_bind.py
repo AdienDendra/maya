@@ -1,4 +1,4 @@
-"""v7.0 visual smoke: final Region blocking followed by constrained smoothing."""
+"""v7.1 visual smoke: exact-tie Region blocking followed by smoothing."""
 
 import builtins
 import importlib
@@ -6,6 +6,7 @@ import importlib
 import maya.cmds as cmds
 import numpy as np
 
+from ad_skin_tools.bind_smoothing import cutoff_projection
 from ad_skin_tools.bind_smoothing import final_constraints
 from ad_skin_tools.bind_smoothing import options as smoothing_options
 from ad_skin_tools.bind_smoothing import v7_blocking_smoothing
@@ -13,6 +14,7 @@ from ad_skin_tools.core.skin_cluster import create_closest_skin_cluster
 from ad_skin_tools.core.undo import undo_chunk
 from ad_skin_tools.region import ambiguous_loop_distance_tiebreak
 from ad_skin_tools.region import closed_loop_opposite_guard
+from ad_skin_tools.region import exact_tie
 from ad_skin_tools.region import solver as region_solver
 from ad_skin_tools.ui import skin_operations
 
@@ -25,9 +27,11 @@ STORED_WEIGHT_TOLERANCE = 1e-10
 
 
 for module in (
+    exact_tie,
     closed_loop_opposite_guard,
     ambiguous_loop_distance_tiebreak,
     smoothing_options,
+    cutoff_projection,
     final_constraints,
     v7_blocking_smoothing,
     region_solver,
@@ -39,7 +43,7 @@ def _loaded_unskinned_context():
     tool_window = skin_operations._TOOL_WINDOW
     if tool_window is None:
         raise RuntimeError(
-            "Open AD Skin Tool before running the v7.0 visual smoke test."
+            "Open AD Skin Tool before running the v7.1 visual smoke test."
         )
 
     tool_window._require_not_busy()
@@ -99,7 +103,7 @@ def _validate_stored_weights(adapter, expected, maximum_influences):
             )
         )[0][:20]
         raise RuntimeError(
-            "Maya stored weights differ from the v7.0 matrix. "
+            "Maya stored weights differ from the v7.1 matrix. "
             "Maximum difference: {}. First vertex IDs: {}".format(
                 maximum_difference,
                 bad.tolist(),
@@ -137,7 +141,7 @@ def run():
 
     adapter = None
     try:
-        with undo_chunk("AD Skin Tool v7.0 Blocking Smoothing Bind"):
+        with undo_chunk("AD Skin Tool v7.1 Blocking Smoothing Bind"):
             adapter = create_closest_skin_cluster(
                 mesh_shape=region_result.mesh_shape,
                 mesh_transform=region_result.mesh_transform,
@@ -171,6 +175,9 @@ def run():
     builtins.AD_SKIN_V70_REGION_RESULT = region_result
     builtins.AD_SKIN_V70_RESULT = result
     builtins.AD_SKIN_V70_SKIN_CLUSTER = adapter.skin_cluster
+    builtins.AD_SKIN_V71_REGION_RESULT = region_result
+    builtins.AD_SKIN_V71_RESULT = result
+    builtins.AD_SKIN_V71_SKIN_CLUSTER = adapter.skin_cluster
 
     cmds.select(region_result.mesh_transform, replace=True)
 
@@ -178,27 +185,50 @@ def run():
     owner_projection = result.owner_maximum_result
     blocking = result.blocking_result
     diffusion = result.diffusion_result
+    exact_tie_result = region_result.exact_tie_result
 
-    print("\n[AD Skin Tool v7.0 - Blocking + Smoothing Visual Bind]")
+    print("\n[AD Skin Tool v7.1 - Exact Tie + Blocking + Smoothing]")
     print("Mesh:", region_result.mesh_transform)
     print("Vertices:", region_result.vertex_count)
     print("Influences:", region_result.influence_count)
+    print("Initial exact-tie vertices:", exact_tie_result.exact_tie_vertex_count)
+    print("Initial exact-tie components:", exact_tie_result.component_count)
     print("Primary opposite axis:", result.guarded_result.axis_context.primary_axis)
     print("v3.10J applied loops:", result.guarded_result.applied_loop_count)
     print("v3.10J changed owner vertices:", result.guarded_result.changed_vertex_count)
     print("v3.10K ambiguous islands:", blocking.ambiguous_region_count)
     print("v3.10K assigned islands:", blocking.assigned_region_count)
     print("v3.10K changed owner vertices:", blocking.changed_vertex_count)
-    print("Final blocking ambiguous vertices:", blocking.final_validation.ambiguous_vertex_count)
+    print(
+        "Post-correction facing detached vertices (diagnostic):",
+        blocking.final_validation.detached_vertex_count,
+    )
+    print(
+        "Post-correction facing ambiguous vertices (diagnostic):",
+        blocking.final_validation.ambiguous_vertex_count,
+    )
     print("Smooth iterations:", result.options.iterations)
     print("Relaxation:", result.options.relaxation)
     print("Effective Max Influences:", result.effective_maximum_influences)
     print("Diffusion changed vertices:", diffusion.changed_vertex_count)
     print("Diffusion mixed vertices:", diffusion.mixed_vertex_count)
-    print("Distance-pruned vertices:", distance_projection.pruned_vertex_count)
-    print("Equal-weight cutoff rows:", len(distance_projection.cutoff_weight_tie_vertex_ids))
-    print("Cutoff ties resolved by distance:", len(distance_projection.distance_resolved_vertex_ids))
-    print("Unresolved exact cutoff ties:", len(distance_projection.unresolved_exact_tie_vertex_ids))
+    print("Geometry-pruned vertices:", distance_projection.pruned_vertex_count)
+    print(
+        "Equal-weight cutoff rows:",
+        len(distance_projection.cutoff_weight_tie_vertex_ids),
+    )
+    print(
+        "Cutoff ties resolved by distance:",
+        len(distance_projection.distance_resolved_vertex_ids),
+    )
+    print(
+        "Cutoff ties resolved by spatial canonical:",
+        len(distance_projection.spatial_canonical_resolved_vertex_ids),
+    )
+    print(
+        "Unresolved coincident cutoff rows:",
+        len(distance_projection.unresolved_coincident_vertex_ids),
+    )
     print("Owner below maximum before:", len(owner_projection.owner_below_maximum_before))
     print("Owner-max projected rows:", owner_projection.projected_vertex_count)
     print("Owner below maximum after:", len(owner_projection.owner_below_maximum_after))
@@ -210,8 +240,12 @@ def run():
     print("SkinCluster:", adapter.skin_cluster)
 
     print(
-        "\nIteration zero must reproduce the v3.10K hard blocking result exactly. "
-        "Positive iterations smooth only from that final blocking owner map."
+        "\nIteration zero must reproduce the final v3.10K hard blocking map "
+        "exactly. Positive iterations diffuse only from that owner map."
+    )
+    print(
+        "The post-correction detached/ambiguous counts above are read-only "
+        "facing diagnostics; they do not indicate unowned vertices."
     )
     print(
         "Inspect pelvis, left/right hip, upper-leg ribbon, and forearm ribbon "
