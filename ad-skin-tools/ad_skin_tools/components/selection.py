@@ -104,11 +104,11 @@ def _rich_vertex_weights(mesh_shape: str, mesh_transform: str):
             iterator.next()
             continue
 
-        if component.apiType() != om.MFn.kMeshVertComponent:
+        component_fn = om.MFnComponent(component)
+        if component_fn.componentType != om.MFn.kMeshVertComponent:
             iterator.next()
             continue
 
-        component_fn = om.MFnComponent(component)
         indexed_fn = om.MFnSingleIndexedComponent(component)
         element_ids = indexed_fn.getElements()
 
