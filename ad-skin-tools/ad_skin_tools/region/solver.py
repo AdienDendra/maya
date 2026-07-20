@@ -1,8 +1,9 @@
 """Production hard-ownership resolution for AD Skin Tool Region.
 
 Detached vertices advance monotonically to their next exact distance candidate.
-Exact ties and ambiguous region-facing results are reported rather than broken
-by naming, selection order, region size, or an arbitrary iteration limit.
+Exact closest-distance ties are completed from topology before connectivity and
+facing are evaluated. Ambiguous region-facing results remain reported rather
+than broken by naming, selection order, or region size.
 """
 
 from dataclasses import dataclass, replace
@@ -21,6 +22,10 @@ from ad_skin_tools.region.distance_ranking import (
     ExactDistanceRankingResult,
     build_exact_distance_tables,
     solve_exact_distance_ranking,
+)
+from ad_skin_tools.region.exact_tie import (
+    ExactTieResolutionResult,
+    resolve_exact_distance_ties,
 )
 from ad_skin_tools.region.facing import (
     build_facing_mesh_context,
@@ -56,6 +61,7 @@ class RegionOwnershipResult:
     final_squared_distances: np.ndarray
     diagnostics: Tuple[InfluenceRegionResolution, ...]
     distance_result: ExactDistanceRankingResult
+    exact_tie_result: ExactTieResolutionResult
     elapsed_seconds: float
 
     @property
@@ -93,16 +99,25 @@ def solve_region_ownership(
         scene_input,
         distance_chunk_size=int(distance_chunk_size),
     )
-    if distance_result.exact_tie_vertex_ids:
-        raise RuntimeError(_minimum_tie_message(distance_result))
-
     tables = build_exact_distance_tables(
         distance_result,
         distance_chunk_size=int(distance_chunk_size),
     )
-    owners = tables.influence_indices[:, 0].astype(np.int32).copy()
-    candidate_ranks = np.zeros(distance_result.vertex_count, dtype=np.int32)
     adjacency = build_vertex_adjacency(distance_result.mesh_shape)
+    exact_tie_result = resolve_exact_distance_ties(
+        distance_result=distance_result,
+        distance_tables=tables,
+        adjacency=adjacency,
+    )
+    owners = np.asarray(
+        exact_tie_result.owner_indices,
+        dtype=np.int32,
+    ).copy()
+    candidate_ranks = np.asarray(
+        exact_tie_result.candidate_ranks,
+        dtype=np.int32,
+    ).copy()
+
     facing_context = build_facing_mesh_context(distance_result.mesh_shape)
     topology_component_count = count_topology_components(adjacency)
 
@@ -195,6 +210,7 @@ def solve_region_ownership(
         final_squared_distances=final_squared,
         diagnostics=final_diagnostics,
         distance_result=distance_result,
+        exact_tie_result=exact_tie_result,
         elapsed_seconds=time.perf_counter() - started,
     )
 
@@ -264,22 +280,3 @@ def _build_owner_vertex_map(owner_indices, influences):
         )
         for influence_index, joint in enumerate(influences)
     }
-
-
-def _minimum_tie_message(result):
-    coincident = "None"
-    if result.coincident_influence_groups:
-        coincident = "\n".join(
-            " | ".join(group) for group in result.coincident_influence_groups
-        )
-
-    return (
-        "Exact closest-distance ownership is underdetermined.\n\n"
-        "Exact-tie vertices: {}\nFirst IDs: {}\n\n"
-        "Exactly coincident joint groups:\n{}\n\n"
-        "Selection order and joint names were not used to invent an owner."
-    ).format(
-        len(result.exact_tie_vertex_ids),
-        list(result.exact_tie_vertex_ids[:20]),
-        coincident,
-    )
