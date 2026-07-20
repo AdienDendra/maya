@@ -33,6 +33,7 @@ SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
 DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
 DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
+SOURCE_VALIDATOR="$REPO/tools/validate_source.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
 CURRENT_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
@@ -82,6 +83,13 @@ if [ ! -f "$DIAGNOSTIC_SRC" ]; then
     echo "ERROR: diagnostic runner is missing: $DIAGNOSTIC_SRC"
     exit 1
 fi
+
+if [ ! -f "$SOURCE_VALIDATOR" ]; then
+    echo "ERROR: source validator is missing: $SOURCE_VALIDATOR"
+    exit 1
+fi
+
+python3 "$SOURCE_VALIDATOR"
 
 mkdir -p "$SCRIPT_DST_DIR"
 rm -rf "$PACKAGE_DST"
