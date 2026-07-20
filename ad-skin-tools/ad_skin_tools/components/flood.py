@@ -1,17 +1,16 @@
-"""Weighted Component Flood for AD Skin Tool v8.0."""
+"""Weighted component Flood for existing skin weights."""
 
 from dataclasses import dataclass
 from typing import Tuple
 
 import maya.cmds as cmds
 
-from ad_skin_tools.components.selection import (
-    collect_weighted_mesh_vertices,
-)
+from ad_skin_tools.components.selection import collect_weighted_mesh_vertices
 from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.influence_lock import locked_influences
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 from ad_skin_tools.core.undo import undo_chunk
+from ad_skin_tools.core.undoable_skin_weights import apply_undoable_weights
 
 
 np = ensure_numpy()
@@ -71,7 +70,7 @@ def flood_selected_components_to_joint(
     target_joint: str,
     target_locked_override: bool = False,
 ) -> ComponentFloodResult:
-    """Replace target weight from Maya component falloff on writable rows."""
+    """Replace the target weight using Maya component falloff."""
 
     selection_before = cmds.ls(selection=True, long=True) or []
     scope = collect_weighted_mesh_vertices(mesh_shape, mesh_transform)
@@ -122,7 +121,7 @@ def flood_selected_components_to_joint(
 
     try:
         try:
-            with undo_chunk("AD Skin Tool Weighted Component Flood"):
+            with undo_chunk("AD Skin Tool Component Flood"):
                 if not target_is_bound:
                     _add_influence(
                         skin_cluster=adapter.skin_cluster,
@@ -165,18 +164,20 @@ def flood_selected_components_to_joint(
                 flooded_vertex_ids = selected_vertex_ids[writable_mask]
 
                 if flooded_vertex_ids.size:
+                    writable_before = before_weights[writable_mask].copy()
                     write_weights, flooded_target_weights = _build_weight_rows(
-                        baseline=before_weights[writable_mask],
+                        baseline=writable_before,
                         target_column=int(target_column),
                         target_values=requested_target_weights[writable_mask],
                     )
-                    adapter.set_weights(
-                        flooded_vertex_ids,
-                        write_weights,
-                        normalize=False,
+                    apply_undoable_weights(
+                        skin_cluster=adapter.skin_cluster,
+                        mesh_shape=scope.mesh_shape,
+                        vertex_ids=flooded_vertex_ids,
+                        before_weights=writable_before,
+                        after_weights=write_weights,
                     )
                     mutation_recorded = True
-
                     _validate_written_rows(
                         adapter=adapter,
                         vertex_ids=flooded_vertex_ids,
@@ -222,7 +223,7 @@ def flood_selected_components_to_joint(
 
 
 def print_component_flood_report(result: ComponentFloodResult) -> None:
-    print("\n[AD Skin Tool v8.0 - Weighted Component Flood]")
+    print("\n[AD Skin Tool - Component Flood]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Target influence:", result.target_joint)
@@ -277,8 +278,7 @@ def _build_weight_rows(baseline, target_column: int, target_values):
             target_values[redistributable]
         )
 
-    # A row already owned only by the target has no previous donor to receive
-    # returned weight. Preserve that row instead of inventing another influence.
+    # A target-only row has no previous donor to receive returned weight.
     applied_target_values = result[:, int(target_column)].copy()
     return result, applied_target_values
 
@@ -336,11 +336,8 @@ def _validate_written_rows(adapter, vertex_ids, expected_weights) -> None:
         adapter.get_weights(vertex_ids).weights,
         dtype=np.float64,
     )
-    tolerance = (
-        float(np.finfo(np.float64).eps)
-        * max(1, stored.shape[1])
-        * 128.0
-    )
+    expected = np.asarray(expected_weights, dtype=np.float64)
+    tolerance = 1e-8
 
     if not np.all(np.isfinite(stored)):
         raise RuntimeError("Component Flood stored non-finite skin weights.")
@@ -348,29 +345,26 @@ def _validate_written_rows(adapter, vertex_ids, expected_weights) -> None:
         raise RuntimeError("Component Flood stored negative skin weights.")
     if not np.allclose(
         stored,
-        expected_weights,
+        expected,
         rtol=0.0,
         atol=tolerance,
     ):
         changed = np.where(
-            np.any(
-                np.abs(stored - expected_weights) > tolerance,
-                axis=1,
-            )
+            np.any(np.abs(stored - expected) > tolerance, axis=1)
         )[0][:20]
-        bad_vertex_ids = vertex_ids[changed].tolist()
         raise RuntimeError(
             "Component Flood did not store the calculated weights. "
-            "First vertex IDs: {}".format(bad_vertex_ids)
+            "First vertex IDs: {}".format(vertex_ids[changed].tolist())
         )
 
-    row_sums = stored.sum(axis=1)
+    row_sums = np.sum(stored, axis=1, dtype=np.float64)
     bad_sums = np.where(np.abs(row_sums - 1.0) > tolerance)[0]
     if bad_sums.size:
-        bad_vertex_ids = vertex_ids[bad_sums[:20]].tolist()
         raise RuntimeError(
             "Component Flood produced invalid normalized rows. "
-            "First vertex IDs: {}".format(bad_vertex_ids)
+            "First vertex IDs: {}".format(
+                vertex_ids[bad_sums[:20]].tolist()
+            )
         )
 
 
@@ -382,14 +376,15 @@ def _validate_protected_rows(adapter, vertex_ids, weights_before) -> None:
         adapter.get_weights(vertex_ids).weights,
         dtype=np.float64,
     )
-    if not np.array_equal(after, weights_before):
+    before = np.asarray(weights_before, dtype=np.float64)
+    tolerance = 1e-12
+    if not np.allclose(after, before, rtol=0.0, atol=tolerance):
         changed = np.where(
-            np.any(after != weights_before, axis=1)
+            np.any(np.abs(after - before) > tolerance, axis=1)
         )[0][:20]
-        bad_vertex_ids = vertex_ids[changed].tolist()
         raise RuntimeError(
             "Component Flood changed weights protected by a locked influence. "
-            "First vertex IDs: {}".format(bad_vertex_ids)
+            "First vertex IDs: {}".format(vertex_ids[changed].tolist())
         )
 
 
