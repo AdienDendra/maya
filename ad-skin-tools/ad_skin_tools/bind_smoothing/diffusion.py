@@ -1,9 +1,8 @@
 """Topology diffusion for the AD Skin Tool bind-smoothing pipeline.
 
-The public smoothing value remains an artist-facing integer from zero to ten.
-v7.5 maps each positive level to two Jacobi diffusion passes so level five
-matches the former level-ten result while level ten remains available for
-very dense characters.
+The public smoothing value is an artist-facing integer from zero to ten. Each
+positive level maps to two Jacobi diffusion passes, preserving the approved
+smoothing scale while keeping the full level range available for dense meshes.
 """
 
 from dataclasses import dataclass
