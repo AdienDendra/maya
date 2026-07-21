@@ -1,4 +1,4 @@
-"""Interactive runner for Region Research v10.0 stage 01."""
+"""Interactive runner for Region Research stage 01."""
 
 import builtins
 from typing import Sequence
@@ -40,7 +40,7 @@ def get_last_result() -> NearestRegionResearchResult:
 
 
 def print_stage_01_report(result: NearestRegionResearchResult) -> None:
-    print("\n[AD Skin Tool - Region Research v10.0 / Stage 01]")
+    print("\n[AD Skin Tool - Region Research / Stage 01]")
     print("Mesh:", result.context.mesh_transform)
     print("Vertices:", result.context.vertex_count)
     print("Faces:", result.context.face_count)
