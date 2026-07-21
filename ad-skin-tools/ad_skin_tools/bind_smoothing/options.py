@@ -3,8 +3,10 @@
 from dataclasses import dataclass
 
 from ad_skin_tools.bind_smoothing.diffusion import (
-    DEFAULT_RELAXATION,
+    DEFAULT_BLEND,
+    MAXIMUM_BLEND,
     MAXIMUM_ITERATIONS,
+    MINIMUM_BLEND,
     MINIMUM_ITERATIONS,
 )
 
@@ -18,13 +20,18 @@ class BindSmoothingOptions:
     """Artist-facing options for the automatic bind-smoothing pipeline."""
 
     iterations: int = 0
-    relaxation: float = DEFAULT_RELAXATION
+    blend: float = DEFAULT_BLEND
     maximum_influences: int = DEFAULT_MAXIMUM_INFLUENCES
     weight_epsilon: float = DEFAULT_WEIGHT_EPSILON
 
+    @property
+    def relaxation(self) -> float:
+        """Compatibility alias for pre-v9.2 callers."""
+        return self.blend
+
     def validated(self) -> "BindSmoothingOptions":
         iterations = int(self.iterations)
-        relaxation = float(self.relaxation)
+        blend = float(self.blend)
         maximum_influences = int(self.maximum_influences)
         weight_epsilon = float(self.weight_epsilon)
 
@@ -38,9 +45,12 @@ class BindSmoothingOptions:
                     MAXIMUM_ITERATIONS,
                 )
             )
-        if not 0.0 <= relaxation <= 1.0:
+        if blend < MINIMUM_BLEND or blend > MAXIMUM_BLEND:
             raise ValueError(
-                "relaxation must be between 0.0 and 1.0."
+                "blend must be between {:.1f} and {:.1f}.".format(
+                    MINIMUM_BLEND,
+                    MAXIMUM_BLEND,
+                )
             )
         if maximum_influences < 1:
             raise ValueError(
@@ -53,7 +63,7 @@ class BindSmoothingOptions:
 
         return BindSmoothingOptions(
             iterations=iterations,
-            relaxation=relaxation,
+            blend=blend,
             maximum_influences=maximum_influences,
             weight_epsilon=weight_epsilon,
         )
@@ -62,12 +72,7 @@ class BindSmoothingOptions:
         self,
         influence_count: int,
     ) -> int:
-        """Return the actual per-vertex limit for this solve.
-
-        Iteration zero preserves the hard one-hot contract. Any positive
-        iteration uses at most five influences, or fewer when the supplied
-        influence list itself contains fewer than five joints.
-        """
+        """Return the actual per-vertex limit for this solve."""
 
         validated = self.validated()
         influence_count = int(influence_count)
