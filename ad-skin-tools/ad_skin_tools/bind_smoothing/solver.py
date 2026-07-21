@@ -1,9 +1,8 @@
-"""Smoothing pipeline for an already-final hard Region owner map.
+"""Smoothing pipeline for final Region ownership and fixed boundary weights.
 
-The Region stage owns every blocking decision. This module accepts one final
-owner index per vertex and never calls Region connectivity, facing, exact-tie,
-or closed-loop correction logic. It only converts immutable hard ownership into
-continuous, constrained skin weights.
+Region remains the blocking authority. Blend and Iterations control only topology
+weight diffusion. Bind Skin updates every row. Add Influence can restrict updates
+and final constraints to claimed rows while existing rows remain fixed context.
 """
 
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ class BindSmoothingResult:
 
     weights: np.ndarray
     blocking_owner_indices: np.ndarray
+    constrained_vertex_ids: np.ndarray
     options: BindSmoothingOptions
     effective_maximum_influences: int
     diffusion_result: BindDiffusionResult
@@ -58,11 +58,15 @@ def solve_bind_smoothing(
     vertex_positions: np.ndarray,
     influence_positions: np.ndarray,
     options: Optional[BindSmoothingOptions] = None,
+    initial_weights: Optional[np.ndarray] = None,
+    mutable_vertex_ids: Optional[Sequence[int]] = None,
+    constrained_vertex_ids: Optional[Sequence[int]] = None,
 ) -> BindSmoothingResult:
-    """Smooth final blocking ownership without recalculating ownership.
+    """Smooth weights without recalculating Region ownership.
 
-    ``owner_indices`` is the final blocking contract: exactly one valid influence
-    index per vertex. The array is copied on entry and never modified.
+    ``initial_weights`` defaults to exact one-hot ownership. ``mutable_vertex_ids``
+    restricts diffusion updates. ``constrained_vertex_ids`` restricts Max
+    Influences, owner maximality, and final validation to rows that will be written.
     """
 
     options = (options or BindSmoothingOptions()).validated()
@@ -74,55 +78,85 @@ def solve_bind_smoothing(
     )
     influence_count = int(influences.shape[0])
     effective_maximum = options.effective_maximum_influences(influence_count)
+    constrained_ids = _resolve_vertex_ids(
+        constrained_vertex_ids,
+        owners.size,
+        default_all=True,
+        label="constrained_vertex_ids",
+    )
 
     diffusion_result = diffuse_hard_ownership(
         owner_indices=owners,
         adjacency=adjacency,
         influence_count=influence_count,
         iterations=options.iterations,
-        relaxation=options.relaxation,
+        blend=options.blend,
+        initial_weights=initial_weights,
+        mutable_vertex_ids=mutable_vertex_ids,
     )
 
+    constrained_weights = np.asarray(
+        diffusion_result.weights[constrained_ids],
+        dtype=np.float64,
+    ).copy()
+    constrained_owners = owners[constrained_ids]
+    constrained_positions = vertices[constrained_ids]
+
     projection_result = enforce_maximum_influences_by_geometry(
-        weights=diffusion_result.weights,
-        owner_indices=owners,
-        vertex_positions=vertices,
+        weights=constrained_weights,
+        owner_indices=constrained_owners,
+        vertex_positions=constrained_positions,
         influence_positions=influences,
         maximum_influences=effective_maximum,
         weight_epsilon=options.weight_epsilon,
     )
     if projection_result.unresolved_coincident_vertex_ids:
+        bad = constrained_ids[
+            np.asarray(
+                projection_result.unresolved_coincident_vertex_ids[:20],
+                dtype=np.int32,
+            )
+        ]
         raise RuntimeError(
             "Max Influences cannot distinguish exactly coincident cutoff joints. "
             "Their smoothed weights, vertex distances, and world positions are "
-            "identical. First vertex IDs: {}".format(
-                list(projection_result.unresolved_coincident_vertex_ids[:20])
-            )
+            "identical. First vertex IDs: {}".format(bad.tolist())
         )
 
     owner_maximum_result = project_region_owner_to_maximum(
         weights=projection_result.weights,
-        owner_indices=owners,
+        owner_indices=constrained_owners,
     )
     if owner_maximum_result.owner_below_maximum_after:
+        bad = constrained_ids[
+            np.asarray(
+                owner_maximum_result.owner_below_maximum_after[:20],
+                dtype=np.int32,
+            )
+        ]
         raise RuntimeError(
             "Final blocking owner remains below another influence after owner "
-            "preservation. First vertex IDs: {}".format(
-                list(owner_maximum_result.owner_below_maximum_after[:20])
-            )
+            "preservation. First vertex IDs: {}".format(bad.tolist())
         )
 
     validation_result = validate_bind_weights(
         weights=owner_maximum_result.weights,
-        owner_indices=owners,
+        owner_indices=constrained_owners,
         maximum_influences=effective_maximum,
         weight_epsilon=options.weight_epsilon,
         require_exact_one_hot=options.iterations == 0,
     )
 
+    final_weights = np.asarray(
+        diffusion_result.weights,
+        dtype=np.float64,
+    ).copy()
+    final_weights[constrained_ids] = owner_maximum_result.weights
+
     return BindSmoothingResult(
-        weights=owner_maximum_result.weights,
+        weights=final_weights,
         blocking_owner_indices=owners.copy(),
+        constrained_vertex_ids=constrained_ids.copy(),
         options=options,
         effective_maximum_influences=effective_maximum,
         diffusion_result=diffusion_result,
@@ -130,6 +164,23 @@ def solve_bind_smoothing(
         owner_maximum_result=owner_maximum_result,
         validation_result=validation_result,
     )
+
+
+def _resolve_vertex_ids(values, vertex_count, default_all, label):
+    if values is None:
+        if default_all:
+            return np.arange(int(vertex_count), dtype=np.int32)
+        return np.empty(0, dtype=np.int32)
+
+    ids = np.asarray(
+        sorted({int(value) for value in values}),
+        dtype=np.int32,
+    )
+    if ids.size and (
+        np.any(ids < 0) or np.any(ids >= int(vertex_count))
+    ):
+        raise ValueError("{} contains an invalid vertex ID.".format(label))
+    return ids
 
 
 def _validate_final_blocking_input(
