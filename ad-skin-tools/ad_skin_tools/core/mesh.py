@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Sequence, Tuple
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
@@ -78,6 +78,54 @@ def get_vertex_normals(
     normals[valid] /= lengths[valid, np.newaxis]
 
     return normals
+
+
+def get_vertex_neighbors(
+    mesh_shape: str,
+    vertex_ids: Sequence[int],
+) -> Tuple[Tuple[int, ...], ...]:
+    """Return direct neighbours for only the requested global vertex IDs."""
+
+    requested = tuple(int(value) for value in vertex_ids)
+    if not requested:
+        return tuple()
+
+    vertex_count = get_vertex_count(mesh_shape)
+    invalid = [
+        vertex_id
+        for vertex_id in requested
+        if vertex_id < 0 or vertex_id >= vertex_count
+    ]
+    if invalid:
+        raise IndexError(
+            "Vertex IDs are outside the mesh range. First IDs: {}".format(
+                invalid[:20]
+            )
+        )
+
+    dag_path = get_dag_path(mesh_shape)
+    component_fn = om.MFnSingleIndexedComponent()
+    component = component_fn.create(om.MFn.kMeshVertComponent)
+    component_fn.addElements(list(sorted(set(requested))))
+
+    by_vertex = {}
+    iterator = om.MItMeshVertex(dag_path, component)
+    while not iterator.isDone():
+        vertex_id = int(iterator.index())
+        by_vertex[vertex_id] = tuple(
+            int(value) for value in iterator.getConnectedVertices()
+        )
+        iterator.next()
+
+    missing = [vertex_id for vertex_id in requested if vertex_id not in by_vertex]
+    if missing:
+        raise RuntimeError(
+            "Unable to collect neighbours for requested vertices. First IDs: {}".format(
+                missing[:20]
+            )
+        )
+
+    return tuple(by_vertex[vertex_id] for vertex_id in requested)
 
 
 def get_all_vertex_neighbors(mesh_shape: str) -> List[List[int]]:
