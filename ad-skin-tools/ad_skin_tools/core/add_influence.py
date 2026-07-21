@@ -1,8 +1,9 @@
 """Add pending influences by final Region ownership without rebuilding other rows.
 
 Region evaluates existing and pending joints together. Only unlocked vertices whose
-final owner is a pending joint are written. Iteration zero writes hard 1.0 claims;
-positive iterations smooth those claims, while every unclaimed row stays unchanged.
+final owner is a pending joint are written. Iterations zero writes hard 1.0 claims.
+Positive iterations use current skin weights as fixed boundary context and smooth
+only the claimed rows.
 """
 
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import maya.cmds as cmds
 
+from ad_skin_tools.bind_smoothing.diffusion import DEFAULT_BLEND
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
 from ad_skin_tools.bind_smoothing.solver import BindSmoothingResult, solve_bind_smoothing
 from ad_skin_tools.core.compat import ensure_numpy
@@ -45,6 +47,7 @@ class AddInfluenceResult:
     claimed_vertex_ids_by_joint: Dict[str, Tuple[int, ...]]
     diagnostics: Tuple[TargetProposal, ...]
     resolution_pass_count: int
+    smoothing_blend: float
     smoothing_iterations: int
     effective_maximum_influences: int
     smoothing_result: Optional[BindSmoothingResult]
@@ -57,12 +60,14 @@ class AddInfluenceResult:
 def add_influences_by_region(
     mesh: str,
     target_joints: Sequence[str],
+    smoothing_blend: float = DEFAULT_BLEND,
     smoothing_iterations: int = 0,
 ) -> AddInfluenceResult:
     """Add pending joints and update only their unlocked final Region rows."""
 
     smooth_options = BindSmoothingOptions(
-        iterations=int(smoothing_iterations)
+        iterations=int(smoothing_iterations),
+        blend=float(smoothing_blend),
     ).validated()
     selection_before = cmds.ls(selection=True, long=True) or []
     mesh_shape, mesh_transform = _resolve_mesh(mesh)
@@ -175,6 +180,7 @@ def add_influences_by_region(
         claimed_vertex_ids_by_joint=claimed,
         diagnostics=diagnostics,
         resolution_pass_count=region_result.resolution_pass_count,
+        smoothing_blend=float(smooth_options.blend),
         smoothing_iterations=int(smooth_options.iterations),
         effective_maximum_influences=int(effective_maximum),
         smoothing_result=smoothing_result,
@@ -188,7 +194,8 @@ def print_report(result: AddInfluenceResult) -> None:
     print("New influences:", len(result.target_joints))
     print("Locked existing influences:", len(result.locked_influences))
     print("Region resolution passes:", result.resolution_pass_count)
-    print("Smoothing iterations:", result.smoothing_iterations)
+    print("Smoothing Blend:", result.smoothing_blend)
+    print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
     print("Claimed vertices:", result.claimed_vertex_count)
     print("Unchanged vertices:", len(result.unchanged_vertex_ids))
@@ -260,14 +267,29 @@ def _calculate_claimed_weights(
         ] = 1.0
         return weights, None
 
-    hard_owners = np.argmax(baseline, axis=1).astype(np.int32)
-    hard_owners[claimed_ids] = target_by_vertex[claimed_ids]
+    row_sums = np.sum(baseline, axis=1, dtype=np.float64)
+    normalized_baseline = baseline / row_sums[:, np.newaxis]
+    initial_weights = np.zeros(
+        (baseline.shape[0], all_influence_count),
+        dtype=np.float64,
+    )
+    initial_weights[:, :baseline.shape[1]] = normalized_baseline
+    initial_weights[claimed_ids] = 0.0
+    initial_weights[
+        claimed_ids,
+        target_by_vertex[claimed_ids],
+    ] = 1.0
+
+    owner_indices = np.argmax(initial_weights, axis=1).astype(np.int32)
     result = solve_bind_smoothing(
-        owner_indices=hard_owners,
+        owner_indices=owner_indices,
         adjacency=build_vertex_adjacency(region_result.mesh_shape),
         vertex_positions=region_result.vertex_positions,
         influence_positions=region_result.influence_positions,
         options=options,
+        initial_weights=initial_weights,
+        mutable_vertex_ids=claimed_ids,
+        constrained_vertex_ids=claimed_ids,
     )
     return np.asarray(result.weights[claimed_ids], dtype=np.float64).copy(), result
 
