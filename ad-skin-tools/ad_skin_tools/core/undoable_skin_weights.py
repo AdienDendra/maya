@@ -4,20 +4,15 @@ import builtins
 import os
 import uuid
 
-import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
 from ad_skin_tools.core.compat import ensure_numpy
-from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 
 
 np = ensure_numpy()
-COMMAND_NAME = "adSkinSetWeightMatrix"
+COMMAND_NAME = "adSkinSetWeightMatrixV2"
+_PLUGIN_FILENAME = "undoable_skin_weights_v2.py"
 _PAYLOAD_REGISTRY_NAME = "_AD_SKIN_WEIGHT_PAYLOADS"
-
-
-def maya_useNewAPI():
-    pass
 
 
 def apply_undoable_weights(
@@ -29,10 +24,9 @@ def apply_undoable_weights(
 ):
     """Write one skin-weight matrix through Maya's undo queue.
 
-    The Python command and the loaded Maya plug-in can exist under different
-    module names, so the short-lived payload registry lives on ``builtins``.
-    The command removes the payload synchronously and keeps the arrays on the
-    undo command instance for subsequent undo and redo calls.
+    The payload is transferred through a short-lived in-memory registry. The
+    versioned Maya command lives in a separate plug-in module so an older loaded
+    command cannot mistake the registry token for the legacy temporary file path.
     """
 
     vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
@@ -85,9 +79,21 @@ def _take_payload(token):
     return payload
 
 
+def _plugin_path():
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        _PLUGIN_FILENAME,
+    )
+
+
 def _ensure_plugin_loaded():
-    plugin_path = os.path.abspath(__file__)
+    plugin_path = _plugin_path()
     plugin_name = os.path.splitext(os.path.basename(plugin_path))[0]
+
+    if not os.path.exists(plugin_path):
+        raise RuntimeError(
+            "Undoable skin-weight plug-in is missing:\n{}".format(plugin_path)
+        )
 
     try:
         loaded = bool(
@@ -103,75 +109,11 @@ def _ensure_plugin_loaded():
     if not loaded:
         cmds.loadPlugin(plugin_path, quiet=True)
 
-
-class _SetWeightMatrixCommand(om.MPxCommand):
-    def __init__(self):
-        super(_SetWeightMatrixCommand, self).__init__()
-        self._skin_cluster = None
-        self._mesh_shape = None
-        self._vertex_ids = None
-        self._before_weights = None
-        self._after_weights = None
-
-    @staticmethod
-    def creator():
-        return _SetWeightMatrixCommand()
-
-    def doIt(self, args):
-        try:
-            token = args.asString(0)
-        except (IndexError, RuntimeError, TypeError) as exc:
-            raise RuntimeError(
-                "{} requires one in-memory payload token.\n\n{}".format(
-                    COMMAND_NAME,
-                    exc,
-                )
+    try:
+        getattr(cmds, COMMAND_NAME)
+    except AttributeError:
+        raise RuntimeError(
+            "Maya loaded the undo plug-in but did not register {}.".format(
+                COMMAND_NAME
             )
-
-        (
-            self._skin_cluster,
-            self._mesh_shape,
-            self._vertex_ids,
-            self._before_weights,
-            self._after_weights,
-        ) = _take_payload(token)
-
-        self.redoIt()
-
-    def redoIt(self):
-        self._write(self._after_weights)
-
-    def undoIt(self):
-        self._write(self._before_weights)
-
-    def isUndoable(self):
-        return True
-
-    def _write(self, weights):
-        adapter = SkinClusterAdapter(
-            skin_cluster=self._skin_cluster,
-            mesh_shape=self._mesh_shape,
         )
-        adapter.set_weights(
-            self._vertex_ids,
-            weights,
-            normalize=False,
-        )
-
-
-def initializePlugin(plugin_object):
-    plugin = om.MFnPlugin(
-        plugin_object,
-        "AD Skin Tool",
-        "1.1.0",
-        "Any",
-    )
-    plugin.registerCommand(
-        COMMAND_NAME,
-        _SetWeightMatrixCommand.creator,
-    )
-
-
-def uninitializePlugin(plugin_object):
-    plugin = om.MFnPlugin(plugin_object)
-    plugin.deregisterCommand(COMMAND_NAME)
