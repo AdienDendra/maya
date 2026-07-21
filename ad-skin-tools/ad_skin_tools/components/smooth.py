@@ -1,7 +1,7 @@
 """Topology smoothing for existing component skin weights."""
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 import maya.cmds as cmds
 
@@ -95,8 +95,9 @@ def collect_smooth_scope(
     )
     if component_scope.vertex_ids:
         weighted = collect_weighted_mesh_vertices(
-            mesh_shape,
-            mesh_transform,
+            component_scope.mesh_shape,
+            component_scope.mesh_transform,
+            hard_scope=component_scope,
         )
         return ComponentSmoothScope(
             mesh_shape=weighted.mesh_shape,
@@ -178,10 +179,6 @@ def smooth_skin_weights(
         influences,
     )
 
-    all_vertex_ids = np.arange(
-        mesh.get_vertex_count(scope.mesh_shape),
-        dtype=np.int32,
-    )
     selected_vertex_ids = np.asarray(scope.vertex_ids, dtype=np.int32)
     selection_falloffs = np.clip(
         np.asarray(scope.selection_falloffs, dtype=np.float64),
@@ -191,9 +188,25 @@ def smooth_skin_weights(
     if selected_vertex_ids.size != selection_falloffs.size:
         raise RuntimeError("Component Smooth selection data is inconsistent.")
 
-    all_data = adapter.get_weights(all_vertex_ids)
-    baseline = np.asarray(all_data.weights, dtype=np.float64).copy()
-    adjacency = mesh.get_all_vertex_neighbors(scope.mesh_shape)
+    selected_adjacency = mesh.get_vertex_neighbors(
+        scope.mesh_shape,
+        selected_vertex_ids,
+    )
+    context_vertex_ids = _build_context_vertex_ids(
+        selected_vertex_ids,
+        selected_adjacency,
+    )
+    selected_context_rows = _rows_for_vertex_ids(
+        context_vertex_ids,
+        selected_vertex_ids,
+    )
+    selected_neighbour_rows = tuple(
+        _rows_for_vertex_ids(context_vertex_ids, neighbours)
+        for neighbours in selected_adjacency
+    )
+
+    context_data = adapter.get_weights(context_vertex_ids)
+    baseline = np.asarray(context_data.weights, dtype=np.float64).copy()
     locked_columns = tuple(
         influences.index(joint)
         for joint in active_locked
@@ -205,10 +218,11 @@ def smooth_skin_weights(
         changed_vertex_ids,
         skipped_empty_vertex_ids,
         skipped_locked_vertex_ids,
-    ) = _smooth_selected_rows(
+    ) = _smooth_context_rows(
         baseline=baseline,
-        adjacency=adjacency,
+        selected_context_rows=selected_context_rows,
         selected_vertex_ids=selected_vertex_ids,
+        selected_neighbour_rows=selected_neighbour_rows,
         selection_falloffs=selection_falloffs,
         locked_columns=locked_columns,
         blend=blend,
@@ -218,8 +232,12 @@ def smooth_skin_weights(
     command_applied = False
     try:
         if changed_vertex_ids.size:
-            before_weights = baseline[changed_vertex_ids].copy()
-            after_weights = final_weights[changed_vertex_ids].copy()
+            changed_context_rows = _rows_for_vertex_ids(
+                context_vertex_ids,
+                changed_vertex_ids,
+            )
+            before_weights = baseline[changed_context_rows].copy()
+            after_weights = final_weights[changed_context_rows].copy()
             apply_undoable_weights(
                 skin_cluster=adapter.skin_cluster,
                 mesh_shape=scope.mesh_shape,
@@ -281,6 +299,41 @@ def print_component_smooth_report(result: ComponentSmoothResult) -> None:
     print("Locked influences:", len(result.locked_influences))
 
 
+def _build_context_vertex_ids(
+    selected_vertex_ids,
+    selected_adjacency: Sequence[Sequence[int]],
+):
+    selected = np.asarray(selected_vertex_ids, dtype=np.int32)
+    if selected.size != len(selected_adjacency):
+        raise RuntimeError("Component Smooth adjacency does not match the selection.")
+
+    context = set(int(value) for value in selected.tolist())
+    for neighbours in selected_adjacency:
+        context.update(int(value) for value in neighbours)
+    return np.asarray(sorted(context), dtype=np.int32)
+
+
+def _rows_for_vertex_ids(context_vertex_ids, vertex_ids):
+    context = np.asarray(context_vertex_ids, dtype=np.int32)
+    requested = np.asarray(vertex_ids, dtype=np.int32)
+    if not requested.size:
+        return np.empty(0, dtype=np.int32)
+
+    rows = np.searchsorted(context, requested).astype(np.int32)
+    invalid = (
+        (rows < 0)
+        | (rows >= context.size)
+        | (context[np.minimum(rows, context.size - 1)] != requested)
+    )
+    if np.any(invalid):
+        raise RuntimeError(
+            "Component Smooth context is missing required vertex IDs. First IDs: {}".format(
+                requested[invalid][:20].tolist()
+            )
+        )
+    return rows
+
+
 def _smooth_selected_rows(
     baseline,
     adjacency,
@@ -290,8 +343,48 @@ def _smooth_selected_rows(
     blend,
     iterations,
 ):
+    """Compatibility wrapper for callers that supply a full-mesh matrix."""
+
+    selected_vertex_ids = np.asarray(selected_vertex_ids, dtype=np.int32)
+    selected_neighbour_rows = tuple(
+        np.asarray(adjacency[int(vertex_id)], dtype=np.int32)
+        for vertex_id in selected_vertex_ids.tolist()
+    )
+    return _smooth_context_rows(
+        baseline=baseline,
+        selected_context_rows=selected_vertex_ids,
+        selected_vertex_ids=selected_vertex_ids,
+        selected_neighbour_rows=selected_neighbour_rows,
+        selection_falloffs=selection_falloffs,
+        locked_columns=locked_columns,
+        blend=blend,
+        iterations=iterations,
+    )
+
+
+def _smooth_context_rows(
+    baseline,
+    selected_context_rows,
+    selected_vertex_ids,
+    selected_neighbour_rows,
+    selection_falloffs,
+    locked_columns,
+    blend,
+    iterations,
+):
     current = np.asarray(baseline, dtype=np.float64).copy()
     original = current.copy()
+    selected_context_rows = np.asarray(selected_context_rows, dtype=np.int32)
+    selected_vertex_ids = np.asarray(selected_vertex_ids, dtype=np.int32)
+    selection_falloffs = np.asarray(selection_falloffs, dtype=np.float64)
+
+    if selected_context_rows.size != selected_vertex_ids.size:
+        raise RuntimeError("Component Smooth selected row mapping is inconsistent.")
+    if selected_vertex_ids.size != selection_falloffs.size:
+        raise RuntimeError("Component Smooth selection falloff is inconsistent.")
+    if selected_vertex_ids.size != len(selected_neighbour_rows):
+        raise RuntimeError("Component Smooth neighbour rows are inconsistent.")
+
     influence_count = int(current.shape[1])
     tolerance = (
         float(np.finfo(np.float64).eps)
@@ -304,8 +397,9 @@ def _smooth_selected_rows(
         locked_mask[list(locked_columns)] = True
     unlocked_columns = np.where(~locked_mask)[0]
 
+    selected_original = original[selected_context_rows]
     selected_row_sums = np.sum(
-        original[selected_vertex_ids],
+        selected_original,
         axis=1,
         dtype=np.float64,
     )
@@ -313,7 +407,7 @@ def _smooth_selected_rows(
 
     if unlocked_columns.size:
         selected_unlocked_sums = np.sum(
-            original[selected_vertex_ids][:, unlocked_columns],
+            selected_original[:, unlocked_columns],
             axis=1,
             dtype=np.float64,
         )
@@ -325,90 +419,142 @@ def _smooth_selected_rows(
     locked_mask_rows = (~empty_mask) & (selected_unlocked_sums <= tolerance)
 
     writable_mask = ~(empty_mask | locked_mask_rows)
-    writable_vertex_ids = selected_vertex_ids[writable_mask]
+    writable_selection_rows = np.where(writable_mask)[0].astype(np.int32)
+    writable_context_rows = selected_context_rows[writable_mask]
     writable_falloffs = selection_falloffs[writable_mask]
+
+    if not writable_context_rows.size or not unlocked_columns.size:
+        return (
+            current,
+            np.empty(0, dtype=np.int32),
+            selected_vertex_ids[empty_mask],
+            selected_vertex_ids[locked_mask_rows],
+        )
+
+    edge_source_rows = []
+    edge_neighbour_rows = []
+    for writable_row, selection_row in enumerate(
+        writable_selection_rows.tolist()
+    ):
+        neighbours = np.asarray(
+            selected_neighbour_rows[int(selection_row)],
+            dtype=np.int32,
+        )
+        if not neighbours.size:
+            continue
+        edge_source_rows.extend([int(writable_row)] * int(neighbours.size))
+        edge_neighbour_rows.extend(int(value) for value in neighbours.tolist())
+
+    edge_source_rows = np.asarray(edge_source_rows, dtype=np.int32)
+    edge_neighbour_rows = np.asarray(edge_neighbour_rows, dtype=np.int32)
+
+    effective_blend = float(blend) * writable_falloffs[:, np.newaxis]
+    if np.any(locked_mask):
+        original_locked_mass = np.sum(
+            original[writable_context_rows][:, locked_mask],
+            axis=1,
+            dtype=np.float64,
+        )
+    else:
+        original_locked_mass = np.zeros(
+            writable_context_rows.size,
+            dtype=np.float64,
+        )
+    available_mass = np.maximum(0.0, 1.0 - original_locked_mass)
+    locked_indices = np.where(locked_mask)[0]
 
     for _ in range(int(iterations)):
         source = current
         next_weights = source.copy()
 
-        for vertex_id, selection_falloff in zip(
-            writable_vertex_ids.tolist(),
-            writable_falloffs.tolist(),
-        ):
-            effective_blend = float(blend) * float(selection_falloff)
-            neighbours = adjacency[int(vertex_id)]
-            if not neighbours or effective_blend <= 0.0:
-                continue
-
-            neighbour_ids = np.asarray(neighbours, dtype=np.int32)
-            neighbour_unlocked = source[neighbour_ids][:, unlocked_columns]
-            neighbour_sums = np.sum(
-                neighbour_unlocked,
-                axis=1,
-                dtype=np.float64,
-            )
-            valid_neighbours = neighbour_sums > tolerance
-            if not np.any(valid_neighbours):
-                continue
-
-            neighbour_average = np.mean(
-                neighbour_unlocked[valid_neighbours],
-                axis=0,
-            )
-            average_sum = float(
-                np.sum(neighbour_average, dtype=np.float64)
-            )
-            if average_sum <= tolerance:
-                continue
-            neighbour_distribution = neighbour_average / average_sum
-
-            target_unlocked = source[int(vertex_id), unlocked_columns]
-            target_sum = float(
-                np.sum(target_unlocked, dtype=np.float64)
-            )
-            if target_sum <= tolerance:
-                continue
-            target_distribution = target_unlocked / target_sum
-
-            blended_distribution = (
-                target_distribution
-                + effective_blend
-                * (neighbour_distribution - target_distribution)
-            )
-            blended_distribution = np.maximum(
-                blended_distribution,
-                0.0,
-            )
-            blended_sum = float(
-                np.sum(blended_distribution, dtype=np.float64)
-            )
-            if blended_sum <= tolerance:
-                continue
-            blended_distribution /= blended_sum
-
-            locked_mass = float(
-                np.sum(
-                    original[int(vertex_id), locked_mask],
-                    dtype=np.float64,
+        neighbour_accum = np.zeros(
+            (writable_context_rows.size, unlocked_columns.size),
+            dtype=np.float64,
+        )
+        if edge_source_rows.size:
+            edge_values = source[edge_neighbour_rows][:, unlocked_columns]
+            edge_masses = np.sum(edge_values, axis=1, dtype=np.float64)
+            valid_edges = edge_masses > tolerance
+            if np.any(valid_edges):
+                np.add.at(
+                    neighbour_accum,
+                    edge_source_rows[valid_edges],
+                    edge_values[valid_edges],
                 )
-            )
-            available_mass = max(0.0, 1.0 - locked_mass)
 
-            next_weights[int(vertex_id), unlocked_columns] = (
-                blended_distribution * available_mass
+        neighbour_totals = np.sum(
+            neighbour_accum,
+            axis=1,
+            dtype=np.float64,
+        )
+        valid_neighbour_rows = neighbour_totals > tolerance
+
+        target_unlocked = source[writable_context_rows][:, unlocked_columns]
+        target_totals = np.sum(
+            target_unlocked,
+            axis=1,
+            dtype=np.float64,
+        )
+        valid_target_rows = target_totals > tolerance
+        active_rows = (
+            valid_neighbour_rows
+            & valid_target_rows
+            & (writable_falloffs > 0.0)
+            & (float(blend) > 0.0)
+        )
+        if not np.any(active_rows):
+            current = next_weights
+            continue
+
+        neighbour_distribution = np.zeros_like(neighbour_accum)
+        neighbour_distribution[active_rows] = (
+            neighbour_accum[active_rows]
+            / neighbour_totals[active_rows, np.newaxis]
+        )
+
+        target_distribution = np.zeros_like(target_unlocked)
+        target_distribution[active_rows] = (
+            target_unlocked[active_rows]
+            / target_totals[active_rows, np.newaxis]
+        )
+
+        blended_distribution = target_distribution[active_rows] + (
+            effective_blend[active_rows]
+            * (
+                neighbour_distribution[active_rows]
+                - target_distribution[active_rows]
             )
-            if locked_columns:
-                next_weights[int(vertex_id), locked_mask] = (
-                    original[int(vertex_id), locked_mask]
-                )
+        )
+        blended_distribution = np.maximum(blended_distribution, 0.0)
+        blended_totals = np.sum(
+            blended_distribution,
+            axis=1,
+            dtype=np.float64,
+        )
+        valid_blended = blended_totals > tolerance
+
+        active_local_rows = np.where(active_rows)[0][valid_blended]
+        if active_local_rows.size:
+            normalized = (
+                blended_distribution[valid_blended]
+                / blended_totals[valid_blended, np.newaxis]
+            )
+            context_rows = writable_context_rows[active_local_rows]
+            next_weights[np.ix_(context_rows, unlocked_columns)] = (
+                normalized
+                * available_mass[active_local_rows, np.newaxis]
+            )
+            if locked_indices.size:
+                next_weights[np.ix_(context_rows, locked_indices)] = original[
+                    np.ix_(context_rows, locked_indices)
+                ]
 
         current = next_weights
 
     changed_local_mask = np.any(
         np.abs(
-            current[selected_vertex_ids]
-            - original[selected_vertex_ids]
+            current[selected_context_rows]
+            - original[selected_context_rows]
         ) > tolerance,
         axis=1,
     )
