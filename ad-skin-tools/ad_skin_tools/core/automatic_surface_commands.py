@@ -29,3 +29,7 @@ def bind_object_automatic_surface(
 
 def print_report(result: AutomaticSurfaceBindResult) -> None:
     print_automatic_surface_report(result)
+    fallback_ids = result.region_result.neighbour_fallback_vertex_ids
+    print("Region neighbour fallback vertices:", len(fallback_ids))
+    if fallback_ids:
+        print("Region neighbour fallback first IDs:", list(fallback_ids[:20]))
