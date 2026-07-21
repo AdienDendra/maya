@@ -1,7 +1,8 @@
 """Undoable skin-weight matrix writes for Maya."""
 
+import builtins
 import os
-import tempfile
+import uuid
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
@@ -12,6 +13,7 @@ from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 
 np = ensure_numpy()
 COMMAND_NAME = "adSkinSetWeightMatrix"
+_PAYLOAD_REGISTRY_NAME = "_AD_SKIN_WEIGHT_PAYLOADS"
 
 
 def maya_useNewAPI():
@@ -25,7 +27,13 @@ def apply_undoable_weights(
     before_weights,
     after_weights,
 ):
-    """Write one skin-weight matrix through Maya's undo queue."""
+    """Write one skin-weight matrix through Maya's undo queue.
+
+    The Python command and the loaded Maya plug-in can exist under different
+    module names, so the short-lived payload registry lives on ``builtins``.
+    The command removes the payload synchronously and keeps the arrays on the
+    undo command instance for subsequent undo and redo calls.
+    """
 
     vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
     before_weights = np.asarray(before_weights, dtype=np.float64)
@@ -40,28 +48,41 @@ def apply_undoable_weights(
 
     _ensure_plugin_loaded()
 
-    descriptor, payload_path = tempfile.mkstemp(
-        prefix="ad_skin_weights_",
-        suffix=".npz",
+    token = uuid.uuid4().hex
+    registry = _payload_registry()
+    registry[token] = (
+        str(skin_cluster),
+        str(mesh_shape),
+        np.array(vertex_ids, dtype=np.int32, copy=True, order="C"),
+        np.array(before_weights, dtype=np.float64, copy=True, order="C"),
+        np.array(after_weights, dtype=np.float64, copy=True, order="C"),
     )
-    os.close(descriptor)
 
     try:
-        np.savez_compressed(
-            payload_path,
-            skin_cluster=np.asarray(str(skin_cluster)),
-            mesh_shape=np.asarray(str(mesh_shape)),
-            vertex_ids=vertex_ids,
-            before_weights=before_weights,
-            after_weights=after_weights,
-        )
-        getattr(cmds, COMMAND_NAME)(payload_path)
+        getattr(cmds, COMMAND_NAME)(token)
     finally:
-        try:
-            if os.path.exists(payload_path):
-                os.remove(payload_path)
-        except Exception:
-            pass
+        # Normally doIt() consumes the payload. This also clears it if command
+        # dispatch fails before the plug-in can take ownership.
+        registry.pop(token, None)
+
+
+def _payload_registry():
+    registry = getattr(builtins, _PAYLOAD_REGISTRY_NAME, None)
+    if registry is None:
+        registry = {}
+        setattr(builtins, _PAYLOAD_REGISTRY_NAME, registry)
+    return registry
+
+
+def _take_payload(token):
+    payload = _payload_registry().pop(str(token), None)
+    if payload is None:
+        raise RuntimeError(
+            "{} could not resolve its in-memory weight payload.".format(
+                COMMAND_NAME
+            )
+        )
+    return payload
 
 
 def _ensure_plugin_loaded():
@@ -98,30 +119,22 @@ class _SetWeightMatrixCommand(om.MPxCommand):
 
     def doIt(self, args):
         try:
-            payload_path = args.asString(0)
+            token = args.asString(0)
         except (IndexError, RuntimeError, TypeError) as exc:
             raise RuntimeError(
-                "{} requires one weight payload path.\n\n{}".format(
+                "{} requires one in-memory payload token.\n\n{}".format(
                     COMMAND_NAME,
                     exc,
                 )
             )
 
-        with np.load(payload_path, allow_pickle=False) as payload:
-            self._skin_cluster = str(payload["skin_cluster"].item())
-            self._mesh_shape = str(payload["mesh_shape"].item())
-            self._vertex_ids = np.asarray(
-                payload["vertex_ids"],
-                dtype=np.int32,
-            ).copy()
-            self._before_weights = np.asarray(
-                payload["before_weights"],
-                dtype=np.float64,
-            ).copy()
-            self._after_weights = np.asarray(
-                payload["after_weights"],
-                dtype=np.float64,
-            ).copy()
+        (
+            self._skin_cluster,
+            self._mesh_shape,
+            self._vertex_ids,
+            self._before_weights,
+            self._after_weights,
+        ) = _take_payload(token)
 
         self.redoIt()
 
@@ -150,7 +163,7 @@ def initializePlugin(plugin_object):
     plugin = om.MFnPlugin(
         plugin_object,
         "AD Skin Tool",
-        "1.0.0",
+        "1.1.0",
         "Any",
     )
     plugin.registerCommand(
