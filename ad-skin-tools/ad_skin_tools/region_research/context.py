@@ -1,4 +1,4 @@
-"""Immutable Maya scene capture for Region Research v10.0.
+"""Immutable Maya scene capture for Region Research.
 
 This package intentionally does not import anything from ``ad_skin_tools.region``.
 The research branch owns its scene reads and topology context so the old Region
