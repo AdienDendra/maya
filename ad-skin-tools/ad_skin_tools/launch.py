@@ -53,6 +53,7 @@ def reload_modules():
     import ad_skin_tools.bind_smoothing.validation as smoothing_validation
     import ad_skin_tools.bind_smoothing.solver as smoothing_solver
 
+    import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.skin_operations as skin_operations
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
@@ -93,6 +94,7 @@ def reload_modules():
     ]:
         importlib.reload(module)
 
+    importlib.reload(smoothing_controls)
     importlib.reload(joint_list)
     importlib.reload(skin_operations)
     importlib.reload(smoothing_bind_section)
