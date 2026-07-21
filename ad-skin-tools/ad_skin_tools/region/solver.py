@@ -197,15 +197,9 @@ def solve_region_ownership(
             continue
 
         if ambiguous_vertex_ids:
-            raise RuntimeError(
-                "Region ownership is geometrically underdetermined.\n\n"
-                "Ambiguous vertices: {}\nFirst IDs: {}\n\n"
-                "No arbitrary normal threshold, region-size rule, or joint-name "
-                "tie breaker was applied.".format(
-                    len(ambiguous_vertex_ids),
-                    sorted(ambiguous_vertex_ids)[:20],
-                )
-            )
+            # Preserve the current candidate owners and hand unresolved facing
+            # ambiguity to the downstream closed-loop and distance resolver.
+            break
         break
 
     owner_vertex_ids = _build_owner_vertex_map(owners, distance_result.influences)
