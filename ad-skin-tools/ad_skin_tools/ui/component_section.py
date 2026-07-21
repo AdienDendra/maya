@@ -9,29 +9,41 @@ from ad_skin_tools.components import smooth
 from ad_skin_tools.ui import joint_list
 
 
+CTRL_COMPONENT_BLEND = "adSkin_componentSmoothBlend"
+CTRL_COMPONENT_PASSES = "adSkin_componentSmoothPasses"
 CTRL_FLOOD_BUTTON = "adSkin_floodSelectedToJointButton"
 CTRL_SMOOTH_BUTTON = "adSkin_smoothSelectedComponentsButton"
 CTRL_COMPONENT_STATUS = "adSkin_componentOperationStatus"
 
+STATE_COMPONENT_BLEND = "component_smooth_blend"
+STATE_COMPONENT_PASSES = "component_smooth_passes"
+
 _TOOL_WINDOW = None
 _SKIN_OPERATIONS = None
-_SMOOTHING_BIND_SECTION = None
 
 
 def install(
     tool_window_module,
     skin_operations_module,
-    smoothing_bind_section_module,
+    _smoothing_bind_section_module,
 ) -> None:
-    global _TOOL_WINDOW, _SKIN_OPERATIONS, _SMOOTHING_BIND_SECTION
+    global _TOOL_WINDOW, _SKIN_OPERATIONS
 
     _TOOL_WINDOW = tool_window_module
     _SKIN_OPERATIONS = skin_operations_module
-    _SMOOTHING_BIND_SECTION = smoothing_bind_section_module
+
+    _TOOL_WINDOW._STATE.setdefault(
+        STATE_COMPONENT_BLEND,
+        smooth.DEFAULT_COMPONENT_BLEND,
+    )
+    _TOOL_WINDOW._STATE.setdefault(
+        STATE_COMPONENT_PASSES,
+        smooth.DEFAULT_COMPONENT_PASSES,
+    )
 
     _TOOL_WINDOW.show_help = show_help
     _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool"
-    _TOOL_WINDOW.WINDOW_HEIGHT = 665
+    _TOOL_WINDOW.WINDOW_HEIGHT = 720
     _TOOL_WINDOW.WINDOW_WIDTH = 340
 
 
@@ -44,6 +56,38 @@ def build_section() -> None:
         marginHeight=6,
     )
     cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
+
+    cmds.floatSliderGrp(
+        CTRL_COMPONENT_BLEND,
+        label="Blend",
+        field=True,
+        minValue=smooth.MINIMUM_COMPONENT_BLEND,
+        maxValue=smooth.MAXIMUM_COMPONENT_BLEND,
+        fieldMinValue=smooth.MINIMUM_COMPONENT_BLEND,
+        fieldMaxValue=smooth.MAXIMUM_COMPONENT_BLEND,
+        value=_stored_blend(),
+        step=0.05,
+        precision=3,
+        columnWidth3=(90, 52, 170),
+        adjustableColumn=3,
+        dragCommand=_store_blend,
+        changeCommand=_store_blend,
+    )
+    cmds.intSliderGrp(
+        CTRL_COMPONENT_PASSES,
+        label="Passes",
+        field=True,
+        minValue=smooth.MINIMUM_COMPONENT_PASSES,
+        maxValue=smooth.MAXIMUM_COMPONENT_PASSES,
+        fieldMinValue=smooth.MINIMUM_COMPONENT_PASSES,
+        fieldMaxValue=smooth.MAXIMUM_COMPONENT_PASSES,
+        value=_stored_passes(),
+        step=1,
+        columnWidth3=(90, 52, 170),
+        adjustableColumn=3,
+        dragCommand=_store_passes,
+        changeCommand=_store_passes,
+    )
 
     _SKIN_OPERATIONS._named_button_row(
         [
@@ -191,13 +235,8 @@ def apply_component_smooth() -> None:
                 "Use Bind Skin first."
             )
 
-        smoothing_level = _SMOOTHING_BIND_SECTION._query_iterations()
-        if smoothing_level == 0:
-            cmds.warning(
-                "Component Smooth requires Smoothing Iterations of at least 1."
-            )
-            return
-
+        blend = _query_blend()
+        passes = _query_passes()
         scope = smooth.collect_smooth_scope(
             mesh_shape=_TOOL_WINDOW._STATE["mesh_shape"],
             mesh_transform=_TOOL_WINDOW._STATE["mesh_transform"],
@@ -208,9 +247,10 @@ def apply_component_smooth() -> None:
                 title="Smooth Entire Mesh",
                 message=(
                     "Smooth all current skin weights on the loaded mesh?\n\n"
-                    "Smoothing Iterations: {}\n"
+                    "Blend: {:.3f}\n"
+                    "Passes: {}\n"
                     "Locked influences will remain unchanged."
-                ).format(smoothing_level),
+                ).format(blend, passes),
                 button=["Yes", "Cancel"],
                 defaultButton="Yes",
                 cancelButton="Cancel",
@@ -229,7 +269,8 @@ def apply_component_smooth() -> None:
 
         result = smooth.smooth_skin_weights(
             scope=scope,
-            smoothing_level=smoothing_level,
+            blend=blend,
+            passes=passes,
         )
 
         builtins.AD_SKIN_SMOOTH_RESULT = result
@@ -252,11 +293,15 @@ def apply_component_smooth() -> None:
         suffix = " " + " ".join(suffixes) if suffixes else ""
 
         _TOOL_WINDOW._info(
-            "Smooth complete: {} of {} vertices changed in {}, level {}.{}".format(
+            (
+                "Smooth complete: {} of {} vertices changed in {}. "
+                "Blend {:.3f}, {} pass(es).{}"
+            ).format(
                 result.smoothed_vertex_count,
                 result.selected_vertex_count,
                 mode,
-                result.smoothing_level,
+                result.blend,
+                result.passes,
                 suffix,
             )
         )
@@ -269,6 +314,74 @@ def apply_component_smooth() -> None:
             except Exception:
                 pass
         _set_smooth_busy(False)
+
+
+def _stored_blend() -> float:
+    value = float(
+        _TOOL_WINDOW._STATE.get(
+            STATE_COMPONENT_BLEND,
+            smooth.DEFAULT_COMPONENT_BLEND,
+        )
+    )
+    return max(
+        smooth.MINIMUM_COMPONENT_BLEND,
+        min(smooth.MAXIMUM_COMPONENT_BLEND, value),
+    )
+
+
+def _store_blend(value=None, *_unused) -> None:
+    if value is None:
+        value = _stored_blend()
+    value = max(
+        smooth.MINIMUM_COMPONENT_BLEND,
+        min(smooth.MAXIMUM_COMPONENT_BLEND, float(value)),
+    )
+    _TOOL_WINDOW._STATE[STATE_COMPONENT_BLEND] = value
+
+
+def _query_blend() -> float:
+    if cmds.floatSliderGrp(CTRL_COMPONENT_BLEND, exists=True):
+        value = cmds.floatSliderGrp(
+            CTRL_COMPONENT_BLEND,
+            query=True,
+            value=True,
+        )
+        _store_blend(value)
+    return _stored_blend()
+
+
+def _stored_passes() -> int:
+    value = int(
+        _TOOL_WINDOW._STATE.get(
+            STATE_COMPONENT_PASSES,
+            smooth.DEFAULT_COMPONENT_PASSES,
+        )
+    )
+    return max(
+        smooth.MINIMUM_COMPONENT_PASSES,
+        min(smooth.MAXIMUM_COMPONENT_PASSES, value),
+    )
+
+
+def _store_passes(value=None, *_unused) -> None:
+    if value is None:
+        value = _stored_passes()
+    value = max(
+        smooth.MINIMUM_COMPONENT_PASSES,
+        min(smooth.MAXIMUM_COMPONENT_PASSES, int(value)),
+    )
+    _TOOL_WINDOW._STATE[STATE_COMPONENT_PASSES] = value
+
+
+def _query_passes() -> int:
+    if cmds.intSliderGrp(CTRL_COMPONENT_PASSES, exists=True):
+        value = cmds.intSliderGrp(
+            CTRL_COMPONENT_PASSES,
+            query=True,
+            value=True,
+        )
+        _store_passes(value)
+    return _stored_passes()
 
 
 def _set_flood_busy(busy: bool, status: str = "") -> None:
@@ -297,8 +410,8 @@ def _set_component_busy(
 ) -> None:
     if _TOOL_WINDOW is None:
         return
-
     _SKIN_OPERATIONS._set_common_enabled(not busy)
+    _set_smooth_controls_enabled(not busy)
     _TOOL_WINDOW._STATE["busy"] = bool(busy)
 
     if cmds.button(active_control, exists=True):
@@ -323,26 +436,42 @@ def _set_component_busy(
         pass
 
 
+def _set_smooth_controls_enabled(enabled: bool) -> None:
+    if cmds.floatSliderGrp(CTRL_COMPONENT_BLEND, exists=True):
+        cmds.floatSliderGrp(
+            CTRL_COMPONENT_BLEND,
+            edit=True,
+            enable=bool(enabled),
+        )
+    if cmds.intSliderGrp(CTRL_COMPONENT_PASSES, exists=True):
+        cmds.intSliderGrp(
+            CTRL_COMPONENT_PASSES,
+            edit=True,
+            enable=bool(enabled),
+        )
+
+
 def show_help() -> None:
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
         message=(
             "Binding\n"
-            "- Smoothing Iterations is shared by Bind Skin, Add Influence, "
-            "and Component Smooth.\n"
-            "- Bind Skin creates the initial skinCluster from all listed joints.\n"
-            "- Add Influence calculates Region ownership for selected pending joints.\n\n"
+            "Smoothing Iterations applies to Bind Skin and Add Influence. "
+            "Level 0 keeps the final Region blocking as hard weights. "
+            "Positive levels run topology diffusion and keep Region as the "
+            "ownership authority.\n\n"
             "Component Flood\n"
-            "- Select exactly one target joint in the influence list.\n"
-            "- Select vertices, edges, or faces on the loaded mesh.\n"
-            "- Soft Selection off writes target weight 1.0.\n"
-            "- Soft Selection on writes Maya's per-vertex falloff.\n"
-            "- Remaining weight is returned proportionally to previous donors.\n\n"
+            "Select exactly one target joint in the influence list, then select "
+            "vertices, edges, or faces on the loaded mesh. With Soft Selection "
+            "disabled, the target receives weight 1.0. With Soft Selection "
+            "enabled, Maya falloff controls the target weight.\n\n"
             "Component Smooth\n"
-            "- Smoothing Iterations must be at least 1.\n"
-            "- Select vertices, edges, or faces; no target joint is required.\n"
-            "- Soft Selection controls smoothing strength per vertex.\n"
-            "- Selecting the loaded mesh object offers whole-mesh smoothing.\n\n"
+            "Blend controls how far each pass moves the current weights toward "
+            "the average of connected vertices. Passes controls how many times "
+            "that averaging is repeated. Soft Selection multiplies Blend per "
+            "vertex, so the hard selected area receives the full Blend value and "
+            "the falloff area receives less. Select the loaded mesh object to "
+            "smooth the entire mesh.\n\n"
             "Locked influence values remain unchanged."
         ),
         button=["OK"],
