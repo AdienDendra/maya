@@ -1,18 +1,19 @@
-"""Topology diffusion for the AD Skin Tool bind-smoothing pipeline.
+"""Topology diffusion for Bind Skin and Add Influence smoothing.
 
-The public smoothing value is an artist-facing integer from zero to ten. Each
-positive level maps to two Jacobi diffusion passes, preserving the approved
-smoothing scale while keeping the full level range available for dense meshes.
+Blend is the fraction moved toward the connected-neighbour average in one
+iteration. Iterations is the exact number of Jacobi repetitions. No hidden
+multiplier is applied.
 """
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
 
-DEFAULT_RELAXATION = 1.0
-SMOOTHING_PASS_MULTIPLIER = 2
+DEFAULT_BLEND = 0.25
+MINIMUM_BLEND = 0.0
+MAXIMUM_BLEND = 1.0
 MINIMUM_ITERATIONS = 0
 MAXIMUM_ITERATIONS = 10
 
@@ -24,7 +25,8 @@ class BindDiffusionResult:
     weights: np.ndarray
     owner_indices: np.ndarray
     iterations: int
-    relaxation: float
+    blend: float
+    mutable_vertex_ids: Tuple[int, ...]
     changed_vertex_ids: Tuple[int, ...]
     mixed_vertex_ids: Tuple[int, ...]
     dominant_owner_changed_vertex_ids: Tuple[int, ...]
@@ -32,6 +34,11 @@ class BindDiffusionResult:
     iteration_mixed_counts: Tuple[int, ...]
     active_influence_histogram: Tuple[Tuple[int, int], ...]
     maximum_row_sum_error: float
+
+    @property
+    def relaxation(self) -> float:
+        """Compatibility alias for pre-v9.2 diagnostics."""
+        return self.blend
 
     @property
     def vertex_count(self) -> int:
@@ -59,39 +66,45 @@ def diffuse_hard_ownership(
     adjacency: Sequence[Sequence[int]],
     influence_count: int,
     iterations: int,
-    relaxation: float = DEFAULT_RELAXATION,
+    blend: float = DEFAULT_BLEND,
+    initial_weights: Optional[np.ndarray] = None,
+    mutable_vertex_ids: Optional[Sequence[int]] = None,
+    relaxation: Optional[float] = None,
 ) -> BindDiffusionResult:
-    """Diffuse one-hot ownership through connected polygon edges.
+    """Diffuse weights through connected polygon edges.
 
-    ``iterations`` is the artist-facing smoothing level. Every positive level
-    runs ``SMOOTHING_PASS_MULTIPLIER`` Jacobi passes. Iteration zero still
-    returns the original one-hot matrix exactly.
+    Without ``initial_weights`` the solve starts from exact one-hot ownership.
+    ``mutable_vertex_ids`` can restrict updates to selected rows while all other
+    rows remain fixed boundary context. The legacy ``relaxation`` keyword is
+    accepted as an alias for Blend.
     """
 
-    owners = _validate_inputs(
+    if relaxation is not None:
+        if float(blend) != DEFAULT_BLEND and float(blend) != float(relaxation):
+            raise ValueError("Supply either blend or relaxation, not both.")
+        blend = float(relaxation)
+
+    owners, initial, mutable_ids = _validate_inputs(
         owner_indices=owner_indices,
         adjacency=adjacency,
         influence_count=influence_count,
         iterations=iterations,
-        relaxation=relaxation,
+        blend=blend,
+        initial_weights=initial_weights,
+        mutable_vertex_ids=mutable_vertex_ids,
     )
-    influence_count = int(influence_count)
-    smoothing_level = int(iterations)
-    diffusion_passes = smoothing_level * SMOOTHING_PASS_MULTIPLIER
-    relaxation = float(relaxation)
+    iterations = int(iterations)
+    blend = float(blend)
 
-    hard_weights = _build_one_hot_weights(
-        owner_indices=owners,
-        influence_count=influence_count,
-    )
-    current = hard_weights.copy()
+    baseline = initial.copy()
+    current = initial.copy()
     degrees, source_ids, neighbour_ids = _build_edge_arrays(adjacency)
-    tolerance = _numerical_tolerance(influence_count)
+    tolerance = _numerical_tolerance(int(influence_count))
 
     iteration_changed_counts = []
     iteration_mixed_counts = []
 
-    for _ in range(diffusion_passes):
+    for _ in range(iterations):
         neighbour_sums = np.zeros_like(current)
         if source_ids.size:
             np.add.at(
@@ -107,20 +120,29 @@ def diffuse_hard_ownership(
             / degrees[connected_mask, np.newaxis]
         )
 
-        next_weights = current + relaxation * (
-            neighbour_average - current
-        )
+        next_weights = current.copy()
+        if mutable_ids.size:
+            next_weights[mutable_ids] = (
+                current[mutable_ids]
+                + blend
+                * (
+                    neighbour_average[mutable_ids]
+                    - current[mutable_ids]
+                )
+            )
+            next_weights[mutable_ids] = _normalize_rows(
+                next_weights[mutable_ids],
+                tolerance=tolerance,
+            )
+
         next_weights[np.abs(next_weights) <= tolerance] = 0.0
-        current = _normalize_rows(
-            next_weights,
-            tolerance=tolerance,
-        )
+        current = next_weights
 
         iteration_changed_counts.append(
             int(
                 np.count_nonzero(
                     np.any(
-                        np.abs(current - hard_weights) > tolerance,
+                        np.abs(current - baseline) > tolerance,
                         axis=1,
                     )
                 )
@@ -140,7 +162,7 @@ def diffuse_hard_ownership(
 
     changed_vertex_ids = np.where(
         np.any(
-            np.abs(current - hard_weights) > tolerance,
+            np.abs(current - baseline) > tolerance,
             axis=1,
         )
     )[0].astype(np.int32)
@@ -177,8 +199,9 @@ def diffuse_hard_ownership(
     return BindDiffusionResult(
         weights=current,
         owner_indices=owners.copy(),
-        iterations=diffusion_passes,
-        relaxation=relaxation,
+        iterations=iterations,
+        blend=blend,
+        mutable_vertex_ids=tuple(int(value) for value in mutable_ids.tolist()),
         changed_vertex_ids=tuple(
             int(value) for value in changed_vertex_ids.tolist()
         ),
@@ -201,7 +224,9 @@ def _validate_inputs(
     adjacency,
     influence_count,
     iterations,
-    relaxation,
+    blend,
+    initial_weights,
+    mutable_vertex_ids,
 ):
     owners = np.asarray(owner_indices, dtype=np.int32)
     if owners.ndim != 1:
@@ -210,7 +235,6 @@ def _validate_inputs(
     influence_count = int(influence_count)
     if influence_count < 1:
         raise ValueError("influence_count must be at least 1.")
-
     if owners.size:
         invalid_owner_mask = (
             (owners < 0) | (owners >= influence_count)
@@ -237,9 +261,14 @@ def _validate_inputs(
             )
         )
 
-    relaxation = float(relaxation)
-    if not 0.0 <= relaxation <= 1.0:
-        raise ValueError("relaxation must be between 0.0 and 1.0.")
+    blend = float(blend)
+    if blend < MINIMUM_BLEND or blend > MAXIMUM_BLEND:
+        raise ValueError(
+            "blend must be between {:.1f} and {:.1f}.".format(
+                MINIMUM_BLEND,
+                MAXIMUM_BLEND,
+            )
+        )
 
     vertex_count = int(owners.size)
     for vertex_id, neighbours in enumerate(adjacency):
@@ -256,7 +285,51 @@ def _validate_inputs(
                     .format(vertex_id)
                 )
 
-    return owners
+    if initial_weights is None:
+        initial = _build_one_hot_weights(
+            owner_indices=owners,
+            influence_count=influence_count,
+        )
+    else:
+        initial = np.asarray(initial_weights, dtype=np.float64).copy()
+        if initial.shape != (vertex_count, influence_count):
+            raise ValueError(
+                "initial_weights must have shape ({}, {}).".format(
+                    vertex_count,
+                    influence_count,
+                )
+            )
+        if not np.all(np.isfinite(initial)):
+            raise ValueError("initial_weights contains non-finite values.")
+        tolerance = _numerical_tolerance(influence_count)
+        if np.any(initial < -tolerance):
+            bad = np.where(np.any(initial < -tolerance, axis=1))[0][:20]
+            raise ValueError(
+                "initial_weights contains negative values. First vertex IDs: {}"
+                .format(bad.tolist())
+            )
+        initial = np.maximum(initial, 0.0)
+        row_sums = np.sum(initial, axis=1, dtype=np.float64)
+        bad = np.where(np.abs(row_sums - 1.0) > 1e-8)[0]
+        if bad.size:
+            raise ValueError(
+                "initial_weights rows must total 1.0. First vertex IDs: {}"
+                .format(bad[:20].tolist())
+            )
+
+    if mutable_vertex_ids is None:
+        mutable_ids = np.arange(vertex_count, dtype=np.int32)
+    else:
+        mutable_ids = np.asarray(
+            sorted({int(value) for value in mutable_vertex_ids}),
+            dtype=np.int32,
+        )
+        if mutable_ids.size and (
+            np.any(mutable_ids < 0) or np.any(mutable_ids >= vertex_count)
+        ):
+            raise ValueError("mutable_vertex_ids contains an invalid vertex ID.")
+
+    return owners, initial, mutable_ids
 
 
 def _build_one_hot_weights(owner_indices, influence_count):
