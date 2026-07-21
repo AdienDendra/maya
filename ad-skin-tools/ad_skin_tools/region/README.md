@@ -1,27 +1,31 @@
 # AD Skin Tool Region Ownership
 
-`ad_skin_tools.region` is the hard-ownership foundation used by Bind Skin and
-Add Influence. It contains the validated distance, connectivity, local-facing,
-closed-loop, and exact-tie resolution stages.
+`ad_skin_tools.region` is the hard ownership foundation used by Bind Skin and
+Add Influence. It contains the validated distance, connectivity, local facing,
+closed loop, exact tie, and exhausted vertex fallback stages.
 
 ## Production pipeline
 
 1. Rank every vertex against every supplied joint pivot by exact squared
    Euclidean distance.
-2. Build the mesh-edge graph induced by each provisional owner's vertices.
+2. Build the mesh edge graph induced by each provisional owner's vertices.
 3. Split that graph into exact connected ownership regions.
-4. Keep the unique exact-nearest anchor region as primary.
+4. Keep the unique exact nearest anchor region as primary.
 5. Test each secondary region from its exact local anchor using geometric
-   world-space face-normal orientation.
-6. Keep interior-facing regions as co-primary.
+   world space face normal orientation.
+6. Keep interior facing regions as co primary.
 7. Advance rejected detached vertices to their next exact distance candidate and
-   repeat until every vertex has a valid primary or co-primary owner.
-8. Resolve closed-loop and exact-tie ambiguity through the approved geometric
-   guards and distance tie-break stages.
+   repeat while unused candidates remain.
+8. When a vertex exhausts every candidate, assign it from the majority owner of
+   its directly connected neighbours. Ignore other exhausted vertices during the
+   first vote. If the vote is tied, choose the closest tied owner by exact squared
+   distance.
+9. Resolve closed loop and exact tie ambiguity through the approved geometric
+   guards and distance tie break stages.
 
-Candidate rank moves only farther from the vertex, so no arbitrary iteration
-limit is needed. Joint names, hierarchy, selection order, region size, and tuned
-artist thresholds are not ownership criteria.
+Normal candidate rank moves only farther from the vertex. The neighbour fallback
+is used only after that ranking is exhausted. Joint names, hierarchy, region
+size, and tuned artist thresholds are not fallback criteria.
 
 ## Runtime path
 
