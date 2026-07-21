@@ -1,7 +1,7 @@
 """Topology smoothing for existing component skin weights."""
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import maya.cmds as cmds
 
@@ -19,9 +19,14 @@ np = ensure_numpy()
 MINIMUM_COMPONENT_BLEND = 0.0
 MAXIMUM_COMPONENT_BLEND = 1.0
 DEFAULT_COMPONENT_BLEND = 0.25
-MINIMUM_COMPONENT_PASSES = 1
-MAXIMUM_COMPONENT_PASSES = 10
-DEFAULT_COMPONENT_PASSES = 1
+MINIMUM_COMPONENT_ITERATIONS = 1
+MAXIMUM_COMPONENT_ITERATIONS = 10
+DEFAULT_COMPONENT_ITERATIONS = 1
+
+# Compatibility aliases retained for scripts written against v9.0.
+MINIMUM_COMPONENT_PASSES = MINIMUM_COMPONENT_ITERATIONS
+MAXIMUM_COMPONENT_PASSES = MAXIMUM_COMPONENT_ITERATIONS
+DEFAULT_COMPONENT_PASSES = DEFAULT_COMPONENT_ITERATIONS
 
 
 @dataclass(frozen=True)
@@ -47,7 +52,7 @@ class ComponentSmoothResult:
     mesh_shape: str
     mesh_transform: str
     blend: float
-    passes: int
+    iterations: int
     whole_object: bool
     selected_vertex_ids: Tuple[int, ...]
     smoothed_vertex_ids: Tuple[int, ...]
@@ -56,6 +61,11 @@ class ComponentSmoothResult:
     locked_influences: Tuple[str, ...]
     soft_selection_enabled: bool
     soft_selection_used: bool
+
+    @property
+    def passes(self) -> int:
+        """Compatibility alias for v9.0 callers."""
+        return self.iterations
 
     @property
     def selected_vertex_count(self) -> int:
@@ -127,7 +137,8 @@ def collect_smooth_scope(
 def smooth_skin_weights(
     scope: ComponentSmoothScope,
     blend: float,
-    passes: int,
+    iterations: Optional[int] = None,
+    passes: Optional[int] = None,
 ) -> ComponentSmoothResult:
     """Smooth current skin weights inside the resolved selection scope."""
 
@@ -140,12 +151,22 @@ def smooth_skin_weights(
             )
         )
 
-    passes = int(passes)
-    if passes < MINIMUM_COMPONENT_PASSES or passes > MAXIMUM_COMPONENT_PASSES:
+    if iterations is None:
+        iterations = passes
+    elif passes is not None and int(iterations) != int(passes):
+        raise ValueError("Supply either iterations or passes, not conflicting values.")
+    if iterations is None:
+        iterations = DEFAULT_COMPONENT_ITERATIONS
+
+    iterations = int(iterations)
+    if (
+        iterations < MINIMUM_COMPONENT_ITERATIONS
+        or iterations > MAXIMUM_COMPONENT_ITERATIONS
+    ):
         raise ValueError(
-            "Component Smooth Passes must be between {} and {}.".format(
-                MINIMUM_COMPONENT_PASSES,
-                MAXIMUM_COMPONENT_PASSES,
+            "Component Smooth Iterations must be between {} and {}.".format(
+                MINIMUM_COMPONENT_ITERATIONS,
+                MAXIMUM_COMPONENT_ITERATIONS,
             )
         )
 
@@ -191,7 +212,7 @@ def smooth_skin_weights(
         selection_falloffs=selection_falloffs,
         locked_columns=locked_columns,
         blend=blend,
-        passes=passes,
+        iterations=iterations,
     )
 
     command_applied = False
@@ -224,7 +245,7 @@ def smooth_skin_weights(
         mesh_shape=scope.mesh_shape,
         mesh_transform=scope.mesh_transform,
         blend=blend,
-        passes=passes,
+        iterations=iterations,
         whole_object=scope.whole_object,
         selected_vertex_ids=tuple(
             int(value) for value in selected_vertex_ids.tolist()
@@ -252,7 +273,7 @@ def print_component_smooth_report(result: ComponentSmoothResult) -> None:
     print("Soft Selection enabled:", result.soft_selection_enabled)
     print("Soft Selection weights used:", result.soft_selection_used)
     print("Blend:", result.blend)
-    print("Passes:", result.passes)
+    print("Iterations:", result.iterations)
     print("Selected vertices:", result.selected_vertex_count)
     print("Changed vertices:", result.smoothed_vertex_count)
     print("Skipped empty vertices:", len(result.skipped_empty_vertex_ids))
@@ -267,7 +288,7 @@ def _smooth_selected_rows(
     selection_falloffs,
     locked_columns,
     blend,
-    passes,
+    iterations,
 ):
     current = np.asarray(baseline, dtype=np.float64).copy()
     original = current.copy()
@@ -307,7 +328,7 @@ def _smooth_selected_rows(
     writable_vertex_ids = selected_vertex_ids[writable_mask]
     writable_falloffs = selection_falloffs[writable_mask]
 
-    for _ in range(int(passes)):
+    for _ in range(int(iterations)):
         source = current
         next_weights = source.copy()
 
