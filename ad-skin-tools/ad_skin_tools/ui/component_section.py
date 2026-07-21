@@ -224,7 +224,6 @@ def apply_component_smooth() -> None:
         )
         cmds.waitCursor(state=True)
         wait_cursor_active = True
-        cmds.refresh(force=True)
 
         result = smooth.smooth_skin_weights(
             scope=scope,
@@ -290,6 +289,7 @@ def _set_smooth_busy(busy: bool, status: str = "") -> None:
         active_control=CTRL_SMOOTH_BUTTON,
         active_label="Smoothing..." if busy else "Smooth",
         status=status,
+        refresh=busy,
     )
 
 
@@ -298,6 +298,7 @@ def _set_component_busy(
     active_control: str,
     active_label: str,
     status: str,
+    refresh: bool = True,
 ) -> None:
     if _TOOL_WINDOW is None:
         return
@@ -320,10 +321,11 @@ def _set_component_busy(
             visible=bool(busy),
         )
 
-    try:
-        cmds.refresh(force=True)
-    except Exception:
-        pass
+    if refresh:
+        try:
+            cmds.refresh(force=True)
+        except Exception:
+            pass
 
 
 def show_help() -> None:
