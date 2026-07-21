@@ -9,6 +9,7 @@ from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core import mesh
 
 np = ensure_numpy()
+_MDOUBLEARRAY_ACCEPTS_NUMPY = None
 
 
 class SkinClusterError(RuntimeError):
@@ -101,7 +102,7 @@ class SkinClusterAdapter:
 
         influence_count = weights.shape[1]
         influence_indices = om.MIntArray(list(range(influence_count)))
-        flat_weights = om.MDoubleArray(weights.ravel().tolist())
+        flat_weights = _make_double_array(weights)
 
         self.skin_fn.setWeights(
             self.mesh_dag_path,
@@ -110,6 +111,32 @@ class SkinClusterAdapter:
             flat_weights,
             normalize,
         )
+
+
+def _make_double_array(weights: np.ndarray) -> om.MDoubleArray:
+    """Create an MDoubleArray without eagerly allocating Python float objects.
+
+    Maya API 2.0 array constructors accept compatible Python sequences. NumPy
+    arrays work in supported Maya builds; older builds fall back once to the
+    previous list conversion and cache that capability decision.
+    """
+
+    global _MDOUBLEARRAY_ACCEPTS_NUMPY
+
+    flattened = np.ascontiguousarray(
+        weights,
+        dtype=np.float64,
+    ).reshape(-1)
+
+    if _MDOUBLEARRAY_ACCEPTS_NUMPY is not False:
+        try:
+            result = om.MDoubleArray(flattened)
+            _MDOUBLEARRAY_ACCEPTS_NUMPY = True
+            return result
+        except (TypeError, ValueError, RuntimeError):
+            _MDOUBLEARRAY_ACCEPTS_NUMPY = False
+
+    return om.MDoubleArray(flattened.tolist())
 
 
 def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
@@ -138,6 +165,7 @@ def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
 
 def has_skin_cluster(mesh_shape: str) -> bool:
     return find_skin_cluster(mesh_shape, required=False) is not None
+
 
 def create_closest_skin_cluster(
     mesh_shape: str,
@@ -232,7 +260,8 @@ def create_closest_skin_cluster(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
-           
+
+
 def _get_depend_node(node_name: str) -> om.MObject:
     selection = om.MSelectionList()
     selection.add(node_name)
