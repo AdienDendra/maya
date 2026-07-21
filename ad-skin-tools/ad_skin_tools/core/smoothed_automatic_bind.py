@@ -7,6 +7,7 @@ from typing import Dict, Optional, Sequence, Tuple
 import maya.cmds as cmds
 import numpy as np
 
+from ad_skin_tools.bind_smoothing.diffusion import DEFAULT_BLEND
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
 from ad_skin_tools.bind_smoothing.solver import BindSmoothingResult, solve_bind_smoothing
 from ad_skin_tools.core.joint_automatic_bind import InfluenceAutomaticDiagnostic
@@ -31,6 +32,7 @@ class AutomaticSurfaceBindOptions:
 
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE
     fail_on_zero_ownership: bool = False
+    smoothing_blend: float = DEFAULT_BLEND
     smoothing_iterations: int = 0
 
 
@@ -55,6 +57,7 @@ class AutomaticSurfaceBindResult:
     elapsed_seconds: float
     region_result: RegionOwnershipResult
     blocking_owner_indices: np.ndarray
+    smoothing_blend: float
     smoothing_iterations: int
     effective_maximum_influences: int
     smoothing_mixed_vertex_count: int
@@ -77,6 +80,7 @@ def bind_object_automatic_surface(
 
     smoothing_options = BindSmoothingOptions(
         iterations=int(options.smoothing_iterations),
+        blend=float(options.smoothing_blend),
     ).validated()
     selection_before = cmds.ls(selection=True, long=True) or []
 
@@ -191,6 +195,7 @@ def bind_object_automatic_surface(
         elapsed_seconds=float(time.perf_counter() - started),
         region_result=region_result,
         blocking_owner_indices=final_owners,
+        smoothing_blend=float(smoothing_result.options.blend),
         smoothing_iterations=int(smoothing_result.options.iterations),
         effective_maximum_influences=int(
             smoothing_result.effective_maximum_influences
@@ -220,7 +225,8 @@ def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
         result.region_result.exact_tie_result.component_count,
     )
     print("Final blocking owner rows:", result.blocking_owner_indices.size)
-    print("Smoothing iterations:", result.smoothing_iterations)
+    print("Smoothing Blend:", result.smoothing_blend)
+    print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
     print("Smoothing mixed vertices:", result.smoothing_mixed_vertex_count)
     print(
