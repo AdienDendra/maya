@@ -35,6 +35,7 @@ def reload_modules():
     import ad_skin_tools.components.selection as component_selection_weights
     import ad_skin_tools.components.flood as component_flood
     import ad_skin_tools.components.smooth as component_smooth
+    import ad_skin_tools.components.smooth_runtime as component_smooth_runtime
 
     import ad_skin_tools.region.maya_scene as region_maya_scene
     import ad_skin_tools.region.distance_ranking as region_distance_ranking
@@ -72,6 +73,7 @@ def reload_modules():
         component_selection_weights,
         component_flood,
         component_smooth,
+        component_smooth_runtime,
         region_maya_scene,
         region_distance_ranking,
         region_exact_tie,
