@@ -1,12 +1,13 @@
 """Resolve Maya component selection into weighted mesh vertices."""
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
 from ad_skin_tools.core.component_selection import (
+    MeshComponentSelection,
     collect_selected_mesh_vertices,
 )
 
@@ -30,19 +31,29 @@ class WeightedVertexSelection:
 def collect_weighted_mesh_vertices(
     mesh_shape: str,
     mesh_transform: str,
+    hard_scope: Optional[MeshComponentSelection] = None,
 ) -> WeightedVertexSelection:
-    """Return the loaded mesh vertices and their Maya soft-selection weights."""
+    """Return loaded-mesh vertices and Maya soft-selection weights.
 
-    hard_scope = collect_selected_mesh_vertices(mesh_shape, mesh_transform)
+    ``hard_scope`` lets callers reuse an already resolved component selection so
+    Maya does not need to flatten and convert the same selection twice.
+    """
+
+    if hard_scope is None:
+        hard_scope = collect_selected_mesh_vertices(mesh_shape, mesh_transform)
+    elif (
+        hard_scope.mesh_shape != mesh_shape
+        or hard_scope.mesh_transform != mesh_transform
+    ):
+        raise ValueError("hard_scope refers to a different loaded mesh.")
+
     if not hard_scope.vertex_ids:
         raise RuntimeError(
             "Select vertices, edges, or faces on the loaded mesh.\n\n"
             "Components from other meshes are ignored."
         )
 
-    soft_enabled = bool(
-        cmds.softSelect(query=True, softSelectEnabled=True)
-    )
+    soft_enabled = bool(cmds.softSelect(query=True, softSelectEnabled=True))
     if not soft_enabled:
         return _from_hard_scope(hard_scope, soft_enabled=False)
 
@@ -75,7 +86,10 @@ def collect_weighted_mesh_vertices(
     )
 
 
-def _from_hard_scope(hard_scope, soft_enabled: bool) -> WeightedVertexSelection:
+def _from_hard_scope(
+    hard_scope: MeshComponentSelection,
+    soft_enabled: bool,
+) -> WeightedVertexSelection:
     return WeightedVertexSelection(
         mesh_shape=hard_scope.mesh_shape,
         mesh_transform=hard_scope.mesh_transform,
