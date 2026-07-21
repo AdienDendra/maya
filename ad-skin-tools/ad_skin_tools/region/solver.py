@@ -1,9 +1,9 @@
-"""Production hard-ownership resolution for AD Skin Tool Region.
+"""Production hard ownership resolution for AD Skin Tool Region.
 
 Detached vertices advance monotonically to their next exact distance candidate.
-Exact closest-distance ties are completed from topology before connectivity and
-facing are evaluated. Ambiguous region-facing results remain reported rather
-than broken by naming, selection order, or region size.
+Exact closest distance ties are completed from topology before connectivity and
+facing are evaluated. If a vertex exhausts every candidate, direct topology
+neighbours provide a pragmatic fallback owner instead of aborting the bind.
 """
 
 from dataclasses import dataclass, replace
@@ -58,6 +58,7 @@ class RegionOwnershipResult:
     topology_component_count: int
     resolution_pass_count: int
     reassigned_vertex_ids: Tuple[int, ...]
+    neighbour_fallback_vertex_ids: Tuple[int, ...]
     final_squared_distances: np.ndarray
     diagnostics: Tuple[InfluenceRegionResolution, ...]
     distance_result: ExactDistanceRankingResult
@@ -75,6 +76,10 @@ class RegionOwnershipResult:
     @property
     def reassigned_vertex_count(self) -> int:
         return len(self.reassigned_vertex_ids)
+
+    @property
+    def neighbour_fallback_vertex_count(self) -> int:
+        return len(self.neighbour_fallback_vertex_ids)
 
     @property
     def primary_region_count(self) -> int:
@@ -123,6 +128,7 @@ def solve_region_ownership(
 
     resolution_pass_count = 0
     reassigned_vertex_ids = set()
+    neighbour_fallback_vertex_ids = set()
     final_diagnostics = tuple()
 
     while True:
@@ -145,7 +151,11 @@ def solve_region_ownership(
                 facing_context,
             )
 
-            detached_vertex_ids.update(facing.detached_vertex_ids)
+            detached_vertex_ids.update(
+                int(vertex_id)
+                for vertex_id in facing.detached_vertex_ids
+                if int(vertex_id) not in neighbour_fallback_vertex_ids
+            )
             ambiguous_vertex_ids.update(facing.ambiguous_vertex_ids)
             diagnostics.append(
                 InfluenceRegionResolution(
@@ -161,7 +171,7 @@ def solve_region_ownership(
 
         final_diagnostics = tuple(diagnostics)
         if detached_vertex_ids:
-            _advance_detached_vertices(
+            exhausted_vertex_ids = _advance_detached_vertices(
                 tuple(sorted(detached_vertex_ids)),
                 owners,
                 candidate_ranks,
@@ -169,6 +179,20 @@ def solve_region_ownership(
                 tables.squared_distances,
                 distance_result.influences,
             )
+            if exhausted_vertex_ids:
+                assignments = _resolve_exhausted_vertices_from_neighbours(
+                    vertex_ids=exhausted_vertex_ids,
+                    owners=owners,
+                    candidate_ranks=candidate_ranks,
+                    adjacency=adjacency,
+                    ranked_influences=tables.influence_indices,
+                    ranked_squared=tables.squared_distances,
+                )
+                for vertex_id, owner_index, candidate_rank in assignments:
+                    owners[int(vertex_id)] = int(owner_index)
+                    candidate_ranks[int(vertex_id)] = int(candidate_rank)
+                neighbour_fallback_vertex_ids.update(exhausted_vertex_ids)
+
             reassigned_vertex_ids.update(detached_vertex_ids)
             continue
 
@@ -207,6 +231,9 @@ def solve_region_ownership(
         topology_component_count=topology_component_count,
         resolution_pass_count=resolution_pass_count,
         reassigned_vertex_ids=tuple(sorted(reassigned_vertex_ids)),
+        neighbour_fallback_vertex_ids=tuple(
+            sorted(neighbour_fallback_vertex_ids)
+        ),
         final_squared_distances=final_squared,
         diagnostics=final_diagnostics,
         distance_result=distance_result,
@@ -224,15 +251,14 @@ def _advance_detached_vertices(
     influences,
 ):
     influence_count = int(ranked_influences.shape[1])
+    exhausted_vertex_ids = []
 
     for vertex_id in vertex_ids:
         current_rank = int(candidate_ranks[vertex_id])
         next_rank = current_rank + 1
         if next_rank >= influence_count:
-            raise RuntimeError(
-                "Vertex {} exhausted every supplied joint candidate after its "
-                "regions were rejected.".format(vertex_id)
-            )
+            exhausted_vertex_ids.append(int(vertex_id))
+            continue
 
         next_squared = float(ranked_squared[vertex_id, next_rank])
         group_stop = next_rank + 1
@@ -257,6 +283,89 @@ def _advance_detached_vertices(
 
         candidate_ranks[vertex_id] = int(next_rank)
         owners[vertex_id] = int(ranked_influences[vertex_id, next_rank])
+
+    return tuple(exhausted_vertex_ids)
+
+
+def _resolve_exhausted_vertices_from_neighbours(
+    vertex_ids,
+    owners,
+    candidate_ranks,
+    adjacency,
+    ranked_influences,
+    ranked_squared,
+):
+    exhausted_set = {int(vertex_id) for vertex_id in vertex_ids}
+    source_owners = np.asarray(owners, dtype=np.int32).copy()
+    assignments = []
+
+    for vertex_id in sorted(exhausted_set):
+        neighbours = tuple(int(value) for value in adjacency[int(vertex_id)])
+        if not neighbours:
+            raise RuntimeError(
+                "Vertex {} exhausted every supplied joint candidate and has no "
+                "connected vertex neighbour for fallback ownership.".format(
+                    vertex_id
+                )
+            )
+
+        voting_neighbours = tuple(
+            neighbour_id
+            for neighbour_id in neighbours
+            if neighbour_id not in exhausted_set
+        )
+        if not voting_neighbours:
+            voting_neighbours = neighbours
+
+        neighbour_owners = source_owners[
+            np.asarray(voting_neighbours, dtype=np.int32)
+        ]
+        owner_indices, owner_counts = np.unique(
+            neighbour_owners,
+            return_counts=True,
+        )
+        maximum_count = int(np.max(owner_counts))
+        tied_owners = owner_indices[owner_counts == maximum_count]
+
+        ranked_candidates = []
+        for owner_index in tied_owners.tolist():
+            candidate_rank = _candidate_rank_for_owner(
+                vertex_id=vertex_id,
+                owner_index=int(owner_index),
+                ranked_influences=ranked_influences,
+            )
+            ranked_candidates.append(
+                (
+                    float(ranked_squared[vertex_id, candidate_rank]),
+                    int(owner_index),
+                    int(candidate_rank),
+                )
+            )
+
+        ranked_candidates.sort(key=lambda value: (value[0], value[1]))
+        _, owner_index, candidate_rank = ranked_candidates[0]
+        assignments.append(
+            (int(vertex_id), int(owner_index), int(candidate_rank))
+        )
+
+    return tuple(assignments)
+
+
+def _candidate_rank_for_owner(
+    vertex_id,
+    owner_index,
+    ranked_influences,
+):
+    matches = np.where(
+        np.asarray(ranked_influences[int(vertex_id)], dtype=np.int32)
+        == int(owner_index)
+    )[0]
+    if matches.size != 1:
+        raise RuntimeError(
+            "Region distance table does not contain one unique rank for owner {} "
+            "at vertex {}.".format(owner_index, vertex_id)
+        )
+    return int(matches[0])
 
 
 def _distance_result_with_owners(result, owners):
