@@ -5,7 +5,7 @@ import builtins
 import maya.cmds as cmds
 
 from ad_skin_tools.components import flood
-from ad_skin_tools.components import smooth
+from ad_skin_tools.components import smooth_runtime as smooth
 from ad_skin_tools.ui import joint_list
 from ad_skin_tools.ui import smoothing_controls
 
