@@ -15,7 +15,13 @@ from ad_skin_tools.core.undoable_skin_weights import apply_undoable_weights
 
 
 np = ensure_numpy()
-SMOOTHING_PASS_MULTIPLIER = 2
+
+MINIMUM_COMPONENT_BLEND = 0.0
+MAXIMUM_COMPONENT_BLEND = 1.0
+DEFAULT_COMPONENT_BLEND = 0.25
+MINIMUM_COMPONENT_PASSES = 1
+MAXIMUM_COMPONENT_PASSES = 10
+DEFAULT_COMPONENT_PASSES = 1
 
 
 @dataclass(frozen=True)
@@ -23,7 +29,7 @@ class ComponentSmoothScope:
     mesh_shape: str
     mesh_transform: str
     vertex_ids: Tuple[int, ...]
-    strengths: Tuple[float, ...]
+    selection_falloffs: Tuple[float, ...]
     whole_object: bool
     soft_selection_enabled: bool
     soft_selection_used: bool
@@ -40,8 +46,8 @@ class ComponentSmoothResult:
     skin_cluster: str
     mesh_shape: str
     mesh_transform: str
-    smoothing_level: int
-    smoothing_passes: int
+    blend: float
+    passes: int
     whole_object: bool
     selected_vertex_ids: Tuple[int, ...]
     smoothed_vertex_ids: Tuple[int, ...]
@@ -71,7 +77,7 @@ def collect_smooth_scope(
     mesh_shape: str,
     mesh_transform: str,
 ) -> ComponentSmoothScope:
-    """Resolve component selection first, then loaded-mesh object selection."""
+    """Resolve component selection first, then loaded mesh object selection."""
 
     component_scope = collect_selected_mesh_vertices(
         mesh_shape,
@@ -86,7 +92,7 @@ def collect_smooth_scope(
             mesh_shape=weighted.mesh_shape,
             mesh_transform=weighted.mesh_transform,
             vertex_ids=weighted.vertex_ids,
-            strengths=weighted.falloff_weights,
+            selection_falloffs=weighted.falloff_weights,
             whole_object=False,
             soft_selection_enabled=weighted.soft_selection_enabled,
             soft_selection_used=weighted.soft_selection_used,
@@ -104,7 +110,7 @@ def collect_smooth_scope(
             mesh_shape=component_scope.mesh_shape,
             mesh_transform=component_scope.mesh_transform,
             vertex_ids=vertex_ids,
-            strengths=tuple(1.0 for _ in vertex_ids),
+            selection_falloffs=tuple(1.0 for _ in vertex_ids),
             whole_object=True,
             soft_selection_enabled=False,
             soft_selection_used=False,
@@ -120,14 +126,27 @@ def collect_smooth_scope(
 
 def smooth_skin_weights(
     scope: ComponentSmoothScope,
-    smoothing_level: int,
+    blend: float,
+    passes: int,
 ) -> ComponentSmoothResult:
     """Smooth current skin weights inside the resolved selection scope."""
 
-    level = int(smoothing_level)
-    if level < 1 or level > 10:
+    blend = float(blend)
+    if blend < MINIMUM_COMPONENT_BLEND or blend > MAXIMUM_COMPONENT_BLEND:
         raise ValueError(
-            "Component Smooth requires Smoothing Iterations from 1 to 10."
+            "Component Smooth Blend must be between {:.1f} and {:.1f}.".format(
+                MINIMUM_COMPONENT_BLEND,
+                MAXIMUM_COMPONENT_BLEND,
+            )
+        )
+
+    passes = int(passes)
+    if passes < MINIMUM_COMPONENT_PASSES or passes > MAXIMUM_COMPONENT_PASSES:
+        raise ValueError(
+            "Component Smooth Passes must be between {} and {}.".format(
+                MINIMUM_COMPONENT_PASSES,
+                MAXIMUM_COMPONENT_PASSES,
+            )
         )
 
     selection_before = cmds.ls(selection=True, long=True) or []
@@ -143,12 +162,12 @@ def smooth_skin_weights(
         dtype=np.int32,
     )
     selected_vertex_ids = np.asarray(scope.vertex_ids, dtype=np.int32)
-    strengths = np.clip(
-        np.asarray(scope.strengths, dtype=np.float64),
+    selection_falloffs = np.clip(
+        np.asarray(scope.selection_falloffs, dtype=np.float64),
         0.0,
         1.0,
     )
-    if selected_vertex_ids.size != strengths.size:
+    if selected_vertex_ids.size != selection_falloffs.size:
         raise RuntimeError("Component Smooth selection data is inconsistent.")
 
     all_data = adapter.get_weights(all_vertex_ids)
@@ -159,7 +178,6 @@ def smooth_skin_weights(
         for joint in active_locked
         if joint in influences
     )
-    smoothing_passes = level * SMOOTHING_PASS_MULTIPLIER
 
     (
         final_weights,
@@ -170,9 +188,10 @@ def smooth_skin_weights(
         baseline=baseline,
         adjacency=adjacency,
         selected_vertex_ids=selected_vertex_ids,
-        strengths=strengths,
+        selection_falloffs=selection_falloffs,
         locked_columns=locked_columns,
-        passes=smoothing_passes,
+        blend=blend,
+        passes=passes,
     )
 
     command_applied = False
@@ -204,8 +223,8 @@ def smooth_skin_weights(
         skin_cluster=adapter.skin_cluster,
         mesh_shape=scope.mesh_shape,
         mesh_transform=scope.mesh_transform,
-        smoothing_level=level,
-        smoothing_passes=smoothing_passes,
+        blend=blend,
+        passes=passes,
         whole_object=scope.whole_object,
         selected_vertex_ids=tuple(
             int(value) for value in selected_vertex_ids.tolist()
@@ -226,14 +245,14 @@ def smooth_skin_weights(
 
 
 def print_component_smooth_report(result: ComponentSmoothResult) -> None:
-    print("\n[AD Skin Tool - Component Smooth]")
+    print("\n[AD Skin Tool Component Smooth]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Whole object:", result.whole_object)
     print("Soft Selection enabled:", result.soft_selection_enabled)
     print("Soft Selection weights used:", result.soft_selection_used)
-    print("Smoothing level:", result.smoothing_level)
-    print("Internal smoothing passes:", result.smoothing_passes)
+    print("Blend:", result.blend)
+    print("Passes:", result.passes)
     print("Selected vertices:", result.selected_vertex_count)
     print("Changed vertices:", result.smoothed_vertex_count)
     print("Skipped empty vertices:", len(result.skipped_empty_vertex_ids))
@@ -245,8 +264,9 @@ def _smooth_selected_rows(
     baseline,
     adjacency,
     selected_vertex_ids,
-    strengths,
+    selection_falloffs,
     locked_columns,
+    blend,
     passes,
 ):
     current = np.asarray(baseline, dtype=np.float64).copy()
@@ -285,18 +305,19 @@ def _smooth_selected_rows(
 
     writable_mask = ~(empty_mask | locked_mask_rows)
     writable_vertex_ids = selected_vertex_ids[writable_mask]
-    writable_strengths = strengths[writable_mask]
+    writable_falloffs = selection_falloffs[writable_mask]
 
     for _ in range(int(passes)):
         source = current
         next_weights = source.copy()
 
-        for vertex_id, strength in zip(
+        for vertex_id, selection_falloff in zip(
             writable_vertex_ids.tolist(),
-            writable_strengths.tolist(),
+            writable_falloffs.tolist(),
         ):
+            effective_blend = float(blend) * float(selection_falloff)
             neighbours = adjacency[int(vertex_id)]
-            if not neighbours or strength <= 0.0:
+            if not neighbours or effective_blend <= 0.0:
                 continue
 
             neighbour_ids = np.asarray(neighbours, dtype=np.int32)
@@ -331,7 +352,7 @@ def _smooth_selected_rows(
 
             blended_distribution = (
                 target_distribution
-                + float(strength)
+                + effective_blend
                 * (neighbour_distribution - target_distribution)
             )
             blended_distribution = np.maximum(
