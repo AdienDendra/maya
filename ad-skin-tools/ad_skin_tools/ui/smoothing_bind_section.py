@@ -1,4 +1,4 @@
-"""Binding UI with artist-facing smoothing levels from zero to ten."""
+"""Binding UI using shared Blend and Iterations controls."""
 
 import builtins
 
@@ -7,12 +7,8 @@ import maya.cmds as cmds
 from ad_skin_tools.core import add_influence
 from ad_skin_tools.core import automatic_surface_commands
 from ad_skin_tools.ui import joint_list
+from ad_skin_tools.ui import smoothing_controls
 
-
-CTRL_SMOOTHING_ITERATIONS = "adSkin_smoothingIterations"
-MINIMUM_ITERATIONS = 0
-MAXIMUM_ITERATIONS = 10
-DEFAULT_ITERATIONS = 0
 
 _TOOL_WINDOW = None
 _SKIN_OPERATIONS = None
@@ -20,16 +16,14 @@ _BASE_SET_COMMON_ENABLED = None
 
 
 def install(tool_window_module, skin_operations_module) -> None:
-    """Install the smoothing slider and production bind callbacks."""
+    """Install shared smoothing controls and production bind callbacks."""
 
     global _TOOL_WINDOW, _SKIN_OPERATIONS, _BASE_SET_COMMON_ENABLED
     _TOOL_WINDOW = tool_window_module
     _SKIN_OPERATIONS = skin_operations_module
 
-    _TOOL_WINDOW._STATE.setdefault(
-        "smoothing_iterations",
-        DEFAULT_ITERATIONS,
-    )
+    smoothing_controls.configure(tool_window_module)
+    _TOOL_WINDOW._build_joints_section = _build_joints_section
     _SKIN_OPERATIONS._build_binding_section = _build_binding_section
     _TOOL_WINDOW.apply_operation = apply_bind_skin
     _TOOL_WINDOW.show_help = show_help
@@ -40,8 +34,60 @@ def install(tool_window_module, skin_operations_module) -> None:
     _SKIN_OPERATIONS._set_common_enabled = _set_common_enabled
 
     _TOOL_WINDOW.WINDOW_LABEL = "AD Skin Weights Tool"
-    _TOOL_WINDOW.WINDOW_HEIGHT = 665
+    _TOOL_WINDOW.WINDOW_HEIGHT = 720
     _TOOL_WINDOW.WINDOW_WIDTH = 340
+
+
+def _build_joints_section() -> None:
+    """Build the influence tree, list actions, and shared smoothing controls."""
+
+    cmds.frameLayout(
+        label="Joints / Influences",
+        collapsable=True,
+        collapse=False,
+        marginWidth=6,
+        marginHeight=6,
+    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+
+    cmds.treeView(
+        _TOOL_WINDOW.CTRL_JOINT_LIST,
+        allowMultiSelection=True,
+        allowDragAndDrop=False,
+        allowReparenting=False,
+        enableKeys=True,
+        height=220,
+        numberOfButtons=1,
+        attachButtonRight=False,
+        preventOverride=True,
+        pressCommand=(1, joint_list._on_lock_button_pressed),
+        contextMenuCommand=joint_list._prepare_context_menu,
+        selectCommand=joint_list._allow_tree_selection_change,
+    )
+    cmds.popupMenu(
+        joint_list.CTRL_JOINT_CONTEXT_MENU,
+        parent=_TOOL_WINDOW.CTRL_JOINT_LIST,
+        button=3,
+        postMenuCommand=joint_list._populate_joint_context_menu,
+    )
+
+    _TOOL_WINDOW._button_row(
+        [
+            (
+                "Add Joints To The List",
+                lambda *_: joint_list.add_selected_joints(),
+            ),
+            (
+                "Select Joints In The List",
+                lambda *_: joint_list.show_selected_joints_in_list(),
+            ),
+        ],
+        height=30,
+    )
+    smoothing_controls.build_controls()
+
+    cmds.setParent("..")
+    cmds.setParent("..")
 
 
 def _build_binding_section() -> None:
@@ -53,23 +99,6 @@ def _build_binding_section() -> None:
         marginHeight=6,
     )
     cmds.columnLayout(adjustableColumn=True, rowSpacing=7)
-
-    cmds.intSliderGrp(
-        CTRL_SMOOTHING_ITERATIONS,
-        label="Smoothing Iterations",
-        field=True,
-        minValue=MINIMUM_ITERATIONS,
-        maxValue=MAXIMUM_ITERATIONS,
-        fieldMinValue=MINIMUM_ITERATIONS,
-        fieldMaxValue=MAXIMUM_ITERATIONS,
-        value=_stored_iterations(),
-        step=1,
-        columnWidth3=(125, 42, 145),
-        adjustableColumn=3,
-        dragCommand=_store_iterations,
-        changeCommand=_store_iterations,
-        annotation="Smoothing level from 0 to 10. See Tool Help for details.",
-    )
 
     _SKIN_OPERATIONS._named_button_row(
         [
@@ -101,7 +130,7 @@ def _build_binding_section() -> None:
 
 
 def apply_bind_skin() -> None:
-    """Calculate final Region ownership and apply the selected smoothing level."""
+    """Calculate final Region ownership and apply shared smoothing values."""
 
     wait_cursor_active = False
     try:
@@ -112,16 +141,16 @@ def apply_bind_skin() -> None:
         if builtins.len(joints) < 2:
             raise RuntimeError(
                 "Bind Skin requires at least two joints.\n\n"
-                "Select joints in Maya and click Add Selected."
+                "Select joints in Maya and click Add Joints To The List."
             )
 
-        iterations = _query_iterations()
+        values = smoothing_controls.query_values()
         status = "Calculating final blocking ownership..."
-        if iterations > 0:
+        if values.iterations > 0:
             status = (
-                "Calculating final blocking and smoothing level {}..."
-                .format(iterations)
-            )
+                "Calculating final blocking and smoothing with Blend {:.3f}, "
+                "Iterations {}..."
+            ).format(values.blend, values.iterations)
 
         _TOOL_WINDOW._set_bind_busy(True, status)
         cmds.waitCursor(state=True)
@@ -132,7 +161,8 @@ def apply_bind_skin() -> None:
             mesh=_TOOL_WINDOW._STATE["mesh_transform"],
             joints=joints,
             options=automatic_surface_commands.AutomaticSurfaceBindOptions(
-                smoothing_iterations=iterations,
+                smoothing_blend=values.blend,
+                smoothing_iterations=values.iterations,
             ),
         )
 
@@ -140,15 +170,16 @@ def apply_bind_skin() -> None:
         builtins.AD_SKIN_BIND_RESULT = result
         automatic_surface_commands.print_report(result)
 
-        if iterations == 0:
+        if values.iterations == 0:
             message = (
                 "Bind complete: {} vertices with final hard blocking weights."
                 .format(result.vertex_count)
             )
         else:
             message = (
-                "Bind complete: smoothing level {}, Max Influences {}."
+                "Bind complete: Blend {:.3f}, Iterations {}, Max Influences {}."
                 .format(
+                    result.smoothing_blend,
                     result.smoothing_iterations,
                     result.effective_maximum_influences,
                 )
@@ -166,7 +197,7 @@ def apply_bind_skin() -> None:
 
 
 def apply_add_influence() -> None:
-    """Claim pending-joint regions and apply the shared smoothing level."""
+    """Claim pending-joint regions and apply shared smoothing values."""
 
     wait_cursor_active = False
     try:
@@ -203,13 +234,13 @@ def apply_add_influence() -> None:
         staged_locks = set(
             _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
         )
-        iterations = _query_iterations()
+        values = smoothing_controls.query_values()
         status = "Calculating final Region ownership for new influences..."
-        if iterations > 0:
+        if values.iterations > 0:
             status = (
-                "Calculating Region claims and smoothing level {}..."
-                .format(iterations)
-            )
+                "Calculating Region claims and smoothing with Blend {:.3f}, "
+                "Iterations {}..."
+            ).format(values.blend, values.iterations)
 
         _SKIN_OPERATIONS._set_add_influence_busy(True, status)
         cmds.waitCursor(state=True)
@@ -219,7 +250,8 @@ def apply_add_influence() -> None:
         result = add_influence.add_influences_by_region(
             mesh=_TOOL_WINDOW._STATE["mesh_shape"],
             target_joints=targets,
-            smoothing_iterations=iterations,
+            smoothing_blend=values.blend,
+            smoothing_iterations=values.iterations,
         )
 
         joint_list.sync_after_flood_preserving_pending(
@@ -231,10 +263,13 @@ def apply_add_influence() -> None:
         builtins.AD_SKIN_ADD_INFLUENCE_RESULT = result
         add_influence.print_report(result)
         _TOOL_WINDOW._info(
-            "Added {} influence(s); {} vertices claimed; smoothing level {}."
-            .format(
+            (
+                "Added {} influence(s); {} vertices claimed; Blend {:.3f}, "
+                "Iterations {}."
+            ).format(
                 len(result.target_joints),
                 result.claimed_vertex_count,
+                result.smoothing_blend,
                 result.smoothing_iterations,
             )
         )
@@ -249,64 +284,29 @@ def apply_add_influence() -> None:
         _SKIN_OPERATIONS._set_add_influence_busy(False)
 
 
-def _stored_iterations() -> int:
-    value = int(
-        _TOOL_WINDOW._STATE.get(
-            "smoothing_iterations",
-            DEFAULT_ITERATIONS,
-        )
-    )
-    return max(MINIMUM_ITERATIONS, min(MAXIMUM_ITERATIONS, value))
-
-
-def _store_iterations(value=None, *_unused) -> None:
-    if value is None:
-        value = _stored_iterations()
-    value = max(
-        MINIMUM_ITERATIONS,
-        min(MAXIMUM_ITERATIONS, int(value)),
-    )
-    _TOOL_WINDOW._STATE["smoothing_iterations"] = value
-
-
-def _query_iterations() -> int:
-    if cmds.intSliderGrp(CTRL_SMOOTHING_ITERATIONS, exists=True):
-        value = cmds.intSliderGrp(
-            CTRL_SMOOTHING_ITERATIONS,
-            query=True,
-            value=True,
-        )
-        _store_iterations(value)
-    return _stored_iterations()
-
-
 def _set_common_enabled(enabled) -> None:
     if _BASE_SET_COMMON_ENABLED is not None:
         _BASE_SET_COMMON_ENABLED(enabled)
-    if cmds.intSliderGrp(CTRL_SMOOTHING_ITERATIONS, exists=True):
-        cmds.intSliderGrp(
-            CTRL_SMOOTHING_ITERATIONS,
-            edit=True,
-            enable=bool(enabled),
-        )
+    smoothing_controls.set_enabled(enabled)
 
 
 def show_help() -> None:
     cmds.confirmDialog(
         title="AD Skin Weights Tool",
         message=(
+            "Shared Smoothing\n"
+            "Blend and Iterations are shared by Bind Skin, Add Influence, and "
+            "Component Smooth. Blend controls how far one iteration moves weights "
+            "toward the connected-neighbour average. Iterations is the exact number "
+            "of smoothing repetitions. There is no hidden multiplier. Iterations 0 "
+            "keeps Bind Skin and Add Influence in hard mode. Component Smooth "
+            "requires at least 1 iteration.\n\n"
             "Binding\n"
-            "- Smoothing Iterations is an artist-facing level from 0 to 10.\n"
-            "- Level 0 preserves hard blocking with no smoothing.\n"
-            "- Each positive level runs two internal topology diffusion passes.\n"
-            "- Level 5 runs 10 passes and Level 10 runs 20 passes.\n"
-            "- Positive smoothing uses Max Influences 5, or fewer when fewer "
-            "joints are available.\n"
-            "- Bind Skin creates the initial skinCluster from all listed joints.\n"
-            "- Add Influence evaluates Region ownership for selected pending joints "
-            "and changes only their unlocked claimed rows.\n\n"
-            "Region remains the blocking authority. Smoothing changes weights, "
-            "not ownership."
+            "Bind Skin starts from final hard Region ownership. Add Influence uses "
+            "the existing skin weights as fixed boundary context and changes only "
+            "the unlocked rows claimed by pending joints. Positive smoothing uses "
+            "Max Influences 5, or fewer when fewer joints are available. Region "
+            "remains the blocking authority."
         ),
         button=["OK"],
     )
