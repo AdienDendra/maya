@@ -1,4 +1,4 @@
-"""Independent Region Research package for AD Skin Tool v10.0."""
+"""Independent Region Research package for AD Skin Tool."""
 
 from ad_skin_tools.region_research.nearest_regions import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
