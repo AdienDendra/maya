@@ -7,10 +7,6 @@ from ad_skin_tools.region_research.boundary_contacts import (
     BoundaryContactResearchResult,
     analyze_secondary_region_boundaries,
 )
-from ad_skin_tools.region_research.multiple_candidate_reassignment import (
-    MultipleCandidateReassignmentResult,
-    propose_multiple_candidate_reassignments,
-)
 from ad_skin_tools.region_research.nearest_regions import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
     NearestRegionResearchResult,
@@ -25,7 +21,6 @@ from ad_skin_tools.region_research.single_candidate_reassignment import (
 STAGE_01_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_01"
 STAGE_02_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_02"
 STAGE_03_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_03"
-STAGE_04_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_04"
 RESULT_SLOT = STAGE_01_RESULT_SLOT
 
 
@@ -93,43 +88,13 @@ def run_stage_03(
 def run_stage_03_from_stage_02(
     stage_02: BoundaryContactResearchResult,
 ) -> SingleCandidateReassignmentResult:
-    """Build conservative single-candidate proposals from Stage 02."""
+    """Build conservative single-contact proposals from Stage 02."""
 
     result = propose_single_candidate_reassignments(stage_02)
     setattr(builtins, STAGE_01_RESULT_SLOT, stage_02.stage_01)
     setattr(builtins, STAGE_02_RESULT_SLOT, stage_02)
     setattr(builtins, STAGE_03_RESULT_SLOT, result)
     print_stage_03_report(result)
-    return result
-
-
-def run_stage_04(
-    mesh: str,
-    joints: Sequence[str],
-    distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
-) -> MultipleCandidateReassignmentResult:
-    """Run stages one through four from fresh scene data."""
-
-    stage_03 = run_stage_03(
-        mesh=mesh,
-        joints=joints,
-        distance_chunk_size=int(distance_chunk_size),
-    )
-    return run_stage_04_from_stage_03(stage_03)
-
-
-def run_stage_04_from_stage_03(
-    stage_03: SingleCandidateReassignmentResult,
-) -> MultipleCandidateReassignmentResult:
-    """Resolve multiple boundary candidates from an existing Stage 03 result."""
-
-    result = propose_multiple_candidate_reassignments(stage_03)
-    stage_02 = stage_03.stage_02
-    setattr(builtins, STAGE_01_RESULT_SLOT, stage_02.stage_01)
-    setattr(builtins, STAGE_02_RESULT_SLOT, stage_02)
-    setattr(builtins, STAGE_03_RESULT_SLOT, stage_03)
-    setattr(builtins, STAGE_04_RESULT_SLOT, result)
-    print_stage_04_report(result)
     return result
 
 
@@ -164,16 +129,6 @@ def get_last_stage_03_result() -> SingleCandidateReassignmentResult:
         raise RuntimeError(
             "No Region Research stage 03 result exists. Run run_stage_03 or "
             "run_stage_03_from_stage_02 first."
-        )
-    return result
-
-
-def get_last_stage_04_result() -> MultipleCandidateReassignmentResult:
-    result = getattr(builtins, STAGE_04_RESULT_SLOT, None)
-    if result is None:
-        raise RuntimeError(
-            "No Region Research stage 04 result exists. Run run_stage_04 or "
-            "run_stage_04_from_stage_03 first."
         )
     return result
 
@@ -287,12 +242,12 @@ def print_stage_02_report(result: BoundaryContactResearchResult) -> None:
 
 def print_stage_03_report(result: SingleCandidateReassignmentResult) -> None:
     print("\n[AD Skin Tool - Region Research / Stage 03]")
-    print("Single-candidate proposals:", result.proposal_count)
-    print("Deferred secondary regions:", result.deferred_region_count)
+    print("Single-contact reassignment proposals:", result.proposal_count)
+    print("Preserved source-owner regions:", result.preserved_region_count)
     print("Proposed changed vertices:", result.changed_vertex_count)
     print("Proposal analysis:", round(result.elapsed_seconds, 6))
 
-    print("\nProposals:")
+    print("\nReassignment proposals:")
     if not result.proposals:
         print("  none")
     for proposal in result.proposals:
@@ -306,80 +261,21 @@ def print_stage_03_report(result: SingleCandidateReassignmentResult) -> None:
             )
         )
 
-    print("\nDeferred:")
-    if not result.deferred_regions:
+    print("\nPreserved with source owner:")
+    if not result.preserved_regions:
         print("  none")
-    for region in result.deferred_regions:
+    for region in result.preserved_regions:
         candidate_names = [
             joint.split("|")[-1]
             for joint in region.candidate_joints
         ]
         print(
-            "  {} region {} | vertices={} | reason={} | candidates={} | "
-            "unassigned_edges={}".format(
+            "  {} region {} | vertices={} | action=keep_source | reason={} | "
+            "external_contacts={}".format(
                 region.source_joint.split("|")[-1],
                 region.source_region_index,
                 region.vertex_count,
                 region.reason,
                 candidate_names,
-                region.unassigned_edge_count,
             )
         )
-
-
-def print_stage_04_report(result: MultipleCandidateReassignmentResult) -> None:
-    print("\n[AD Skin Tool - Region Research / Stage 04]")
-    print("Multiple-candidate proposals:", result.proposal_count)
-    print(
-        "Resolved secondary regions:",
-        "{}/{}".format(
-            result.resolved_secondary_region_count,
-            result.total_secondary_region_count,
-        ),
-    )
-    print("Remaining unresolved regions:", result.unresolved_region_count)
-    print("Total proposed changed vertices:", result.changed_vertex_count)
-    print("Proposal analysis:", round(result.elapsed_seconds, 6))
-
-    print("\nMultiple-candidate proposals:")
-    if not result.proposals:
-        print("  none")
-
-    for proposal in result.proposals:
-        print(
-            "  {} region {} -> {} | vertices={} | reason={}".format(
-                proposal.source_joint.split("|")[-1],
-                proposal.source_region_index,
-                proposal.target_joint.split("|")[-1],
-                proposal.vertex_count,
-                proposal.resolution_reason,
-            )
-        )
-        for score in proposal.candidate_scores:
-            print(
-                "    {} | aggregate_sq={} | mean_sq={} | contact_edges={} | "
-                "frozen_owner_vertices={}".format(
-                    score.joint.split("|")[-1],
-                    _format_score(score.aggregate_squared_distance),
-                    _format_score(score.mean_squared_distance),
-                    score.contact_edge_count,
-                    score.frozen_owner_vertex_count,
-                )
-            )
-
-    print("\nRemaining unresolved:")
-    if not result.unresolved_regions:
-        print("  none")
-    for region in result.unresolved_regions:
-        print(
-            "  {} region {} | vertices={} | reason={}".format(
-                region.source_joint.split("|")[-1],
-                region.source_region_index,
-                region.vertex_count,
-                region.reason,
-            )
-        )
-
-
-def _format_score(value: float) -> str:
-    return "{:.12g}".format(float(value))
