@@ -6,6 +6,7 @@ import maya.cmds as cmds
 
 from ad_skin_tools.core import add_influence
 from ad_skin_tools.core import automatic_surface_commands
+from ad_skin_tools.ui import global_owner_tag
 from ad_skin_tools.ui import joint_list
 from ad_skin_tools.ui import smoothing_controls
 
@@ -130,7 +131,7 @@ def _build_binding_section() -> None:
 
 
 def apply_bind_skin() -> None:
-    """Calculate final Region ownership and apply shared smoothing values."""
+    """Run the production ownership pipeline and apply shared smoothing values."""
 
     wait_cursor_active = False
     try:
@@ -145,6 +146,7 @@ def apply_bind_skin() -> None:
             )
 
         values = smoothing_controls.query_values()
+        tagged_global_owner = global_owner_tag.global_owner_joint()
         status = "Calculating final blocking ownership..."
         if values.iterations > 0:
             status = (
@@ -163,6 +165,7 @@ def apply_bind_skin() -> None:
             options=automatic_surface_commands.AutomaticSurfaceBindOptions(
                 smoothing_blend=values.blend,
                 smoothing_iterations=values.iterations,
+                global_owner_joint=tagged_global_owner,
             ),
         )
 
@@ -302,11 +305,11 @@ def show_help() -> None:
             "keeps Bind Skin and Add Influence in hard mode. Component Smooth "
             "requires at least 1 iteration.\n\n"
             "Binding\n"
-            "Bind Skin starts from final hard Region ownership. Add Influence uses "
-            "the existing skin weights as fixed boundary context and changes only "
-            "the unlocked rows claimed by pending joints. Positive smoothing uses "
-            "Max Influences 5, or fewer when fewer joints are available. Region "
-            "remains the blocking authority."
+            "Bind Skin starts from the final closest-region, Global Owner, and "
+            "closed-loop ownership map. Add Influence currently uses the existing "
+            "skin weights as fixed boundary context and changes only the unlocked "
+            "rows claimed by pending joints. Positive smoothing uses Max Influences "
+            "5, or fewer when fewer joints are available."
         ),
         button=["OK"],
     )

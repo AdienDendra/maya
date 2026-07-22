@@ -1,4 +1,4 @@
-"""UI command boundary for automatic surface binding."""
+"""UI command boundary for production automatic surface binding."""
 
 import builtins
 from typing import Optional, Sequence
@@ -16,7 +16,7 @@ def bind_object_automatic_surface(
     joints: Sequence[str],
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
-    """Bind one unskinned mesh using final ownership and smoothing."""
+    """Bind one unskinned mesh using final ownership and optional smoothing."""
 
     result = _bind_object_automatic_surface(
         mesh=mesh,
@@ -24,12 +24,9 @@ def bind_object_automatic_surface(
         options=options,
     )
     builtins.AD_SKIN_REGION_RESULT = result
+    builtins.AD_SKIN_OWNERSHIP_BIND_RESULT = result
     return result
 
 
 def print_report(result: AutomaticSurfaceBindResult) -> None:
     print_automatic_surface_report(result)
-    fallback_ids = result.region_result.neighbour_fallback_vertex_ids
-    print("Region neighbour fallback vertices:", len(fallback_ids))
-    if fallback_ids:
-        print("Region neighbour fallback first IDs:", list(fallback_ids[:20]))

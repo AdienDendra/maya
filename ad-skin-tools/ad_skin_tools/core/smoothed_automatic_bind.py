@@ -1,4 +1,4 @@
-"""Automatic bind with final blocking followed by optional smoothing."""
+"""Production Bind Skin using the validated ownership pipeline and smoothing."""
 
 from dataclasses import dataclass
 import time
@@ -10,17 +10,18 @@ import numpy as np
 from ad_skin_tools.bind_smoothing.diffusion import DEFAULT_BLEND
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
 from ad_skin_tools.bind_smoothing.solver import BindSmoothingResult, solve_bind_smoothing
-from ad_skin_tools.core.joint_automatic_bind import InfluenceAutomaticDiagnostic
 from ad_skin_tools.core.skin_cluster import (
     create_closest_skin_cluster,
     find_skin_cluster,
 )
 from ad_skin_tools.core.undo import undo_chunk
-from ad_skin_tools.region import ambiguous_loop_distance_tiebreak
-from ad_skin_tools.region import closed_loop_opposite_guard
-from ad_skin_tools.region.connectivity import build_vertex_adjacency
-from ad_skin_tools.region.distance_ranking import DEFAULT_DISTANCE_CHUNK_SIZE
-from ad_skin_tools.region.solver import RegionOwnershipResult, solve_region_ownership
+from ad_skin_tools.region_research.closest_region_ownership import (
+    DEFAULT_DISTANCE_CHUNK_SIZE,
+)
+from ad_skin_tools.region_research.ownership_pipeline import (
+    OwnershipPipelineResult,
+    solve_ownership_pipeline,
+)
 
 
 STORED_WEIGHT_TOLERANCE = 1e-10
@@ -28,12 +29,13 @@ STORED_WEIGHT_TOLERANCE = 1e-10
 
 @dataclass(frozen=True)
 class AutomaticSurfaceBindOptions:
-    """Production bind options exposed through the UI command boundary."""
+    """Production options exposed through the UI command boundary."""
 
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE
     fail_on_zero_ownership: bool = False
     smoothing_blend: float = DEFAULT_BLEND
     smoothing_iterations: int = 0
+    global_owner_joint: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -44,26 +46,33 @@ class AutomaticSurfaceBindResult:
     influences: Tuple[str, ...]
     vertex_count: int
     influence_count: int
-    topology_component_count: int
     ownership_counts: Dict[str, int]
     owner_vertex_ids: Dict[str, Tuple[int, ...]]
     average_owner_distance: float
     maximum_owner_distance: float
-    resolution_pass_count: int
-    reassigned_vertex_count: int
-    primary_region_count: int
-    co_primary_region_count: int
-    diagnostics: Tuple[InfluenceAutomaticDiagnostic, ...]
     elapsed_seconds: float
-    region_result: RegionOwnershipResult
+    ownership_pipeline: OwnershipPipelineResult
     blocking_owner_indices: np.ndarray
     smoothing_blend: float
     smoothing_iterations: int
     effective_maximum_influences: int
     smoothing_mixed_vertex_count: int
-    guarded_result: object
-    blocking_result: object
     smoothing_result: BindSmoothingResult
+    stored_maximum_weight_difference: float
+
+    @property
+    def global_owner_joint(self) -> Optional[str]:
+        return self.ownership_pipeline.global_owner_assignment.global_owner_joint
+
+    @property
+    def global_owner_reassigned_vertex_count(self) -> int:
+        return (
+            self.ownership_pipeline.global_owner_assignment.reassigned_vertex_count
+        )
+
+    @property
+    def closed_loop_changed_vertex_count(self) -> int:
+        return self.ownership_pipeline.closed_loop_ownership.changed_vertex_count
 
 
 def bind_object_automatic_surface(
@@ -71,7 +80,7 @@ def bind_object_automatic_surface(
     joints: Sequence[str],
     options: Optional[AutomaticSurfaceBindOptions] = None,
 ) -> AutomaticSurfaceBindResult:
-    """Bind final ownership and optionally smooth the resulting weights."""
+    """Solve final owners, optionally smooth, then write one skinCluster matrix."""
 
     started = time.perf_counter()
     options = options or AutomaticSurfaceBindOptions()
@@ -84,32 +93,26 @@ def bind_object_automatic_surface(
     ).validated()
     selection_before = cmds.ls(selection=True, long=True) or []
 
-    region_result = solve_region_ownership(
+    pipeline = solve_ownership_pipeline(
         mesh=mesh,
         joints=joints,
+        global_owner_joint=options.global_owner_joint,
         distance_chunk_size=int(options.distance_chunk_size),
     )
-    guarded_result = closed_loop_opposite_guard.solve_closed_loop_opposite_guard(
-        region_result
-    )
-    blocking_result = (
-        ambiguous_loop_distance_tiebreak.solve_ambiguous_loop_distance_tiebreak(
-            region_result,
-            guarded_result,
-        )
-    )
+    closest = pipeline.closest_ownership
+    context = closest.context
     final_owners = np.asarray(
-        blocking_result.corrected_owner_indices,
+        pipeline.final_owner_indices,
         dtype=np.int32,
     ).copy()
 
     owner_vertex_ids, ownership_counts = _final_ownership_maps(
-        region_result,
+        context.influences,
         final_owners,
     )
     zero_ownership = tuple(
         joint
-        for joint in region_result.influences
+        for joint in context.influences
         if ownership_counts[joint] == 0
     )
     if zero_ownership and options.fail_on_zero_ownership:
@@ -119,7 +122,7 @@ def bind_object_automatic_surface(
             )
         )
 
-    if find_skin_cluster(region_result.mesh_shape, required=False):
+    if find_skin_cluster(context.mesh_shape, required=False):
         raise RuntimeError(
             "The loaded object already has skin weights. Initial binding is only "
             "available for an unskinned mesh."
@@ -127,9 +130,9 @@ def bind_object_automatic_surface(
 
     smoothing_result = solve_bind_smoothing(
         owner_indices=final_owners,
-        adjacency=build_vertex_adjacency(region_result.mesh_shape),
-        vertex_positions=region_result.vertex_positions,
-        influence_positions=region_result.influence_positions,
+        adjacency=context.adjacency,
+        vertex_positions=context.vertex_positions,
+        influence_positions=context.influence_positions,
         options=smoothing_options,
     )
     if not np.array_equal(
@@ -142,19 +145,20 @@ def bind_object_automatic_surface(
     try:
         with undo_chunk("AD Skin Tool Bind Skin"):
             adapter = create_closest_skin_cluster(
-                mesh_shape=region_result.mesh_shape,
-                mesh_transform=region_result.mesh_transform,
-                joints=list(region_result.influences),
+                mesh_shape=context.mesh_shape,
+                mesh_transform=context.mesh_transform,
+                joints=list(context.influences),
                 max_influences=smoothing_result.effective_maximum_influences,
             )
             expected = _weights_in_skin_order(
                 adapter,
-                region_result,
+                context.influences,
+                context.vertex_count,
                 smoothing_result.weights,
             )
-            vertex_ids = np.arange(region_result.vertex_count, dtype=np.int32)
+            vertex_ids = np.arange(context.vertex_count, dtype=np.int32)
             adapter.set_weights(vertex_ids, expected, normalize=False)
-            _validate_stored_weights(
+            stored_maximum_difference = _validate_stored_weights(
                 adapter,
                 expected,
                 smoothing_result.effective_maximum_influences,
@@ -169,31 +173,20 @@ def bind_object_automatic_surface(
     finally:
         _restore_selection(selection_before)
 
-    owner_distances = _owner_distances(region_result, final_owners)
-    diagnostics = _build_diagnostics(
-        region_result,
-        owner_vertex_ids,
-    )
-
+    owner_distances = _owner_distances(context, final_owners)
     return AutomaticSurfaceBindResult(
         skin_cluster=adapter.skin_cluster,
-        mesh_shape=region_result.mesh_shape,
-        mesh_transform=region_result.mesh_transform,
-        influences=region_result.influences,
-        vertex_count=region_result.vertex_count,
-        influence_count=region_result.influence_count,
-        topology_component_count=region_result.topology_component_count,
+        mesh_shape=context.mesh_shape,
+        mesh_transform=context.mesh_transform,
+        influences=context.influences,
+        vertex_count=context.vertex_count,
+        influence_count=context.influence_count,
         ownership_counts=ownership_counts,
         owner_vertex_ids=owner_vertex_ids,
         average_owner_distance=float(np.mean(owner_distances)),
         maximum_owner_distance=float(np.max(owner_distances)),
-        resolution_pass_count=region_result.resolution_pass_count,
-        reassigned_vertex_count=region_result.reassigned_vertex_count,
-        primary_region_count=region_result.primary_region_count,
-        co_primary_region_count=region_result.co_primary_region_count,
-        diagnostics=diagnostics,
         elapsed_seconds=float(time.perf_counter() - started),
-        region_result=region_result,
+        ownership_pipeline=pipeline,
         blocking_owner_indices=final_owners,
         smoothing_blend=float(smoothing_result.options.blend),
         smoothing_iterations=int(smoothing_result.options.iterations),
@@ -203,32 +196,51 @@ def bind_object_automatic_surface(
         smoothing_mixed_vertex_count=int(
             smoothing_result.diffusion_result.mixed_vertex_count
         ),
-        guarded_result=guarded_result,
-        blocking_result=blocking_result,
         smoothing_result=smoothing_result,
+        stored_maximum_weight_difference=float(stored_maximum_difference),
     )
 
 
 def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
-    print("\n[AD Skin Tool - Final Blocking + Smoothing Bind]")
+    pipeline = result.ownership_pipeline
+    closest = pipeline.closest_ownership
+    nearest = closest.closest
+    global_assignment = pipeline.global_owner_assignment
+    loops = pipeline.closed_loop_ownership
+
+    print("\n[AD Skin Tool - Ownership Pipeline + Smoothing Bind]")
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Vertices:", result.vertex_count)
     print("Influences:", result.influence_count)
-    print("Topology components:", result.topology_component_count)
+    print("Exact-tie vertices:", nearest.exact_tie_vertex_count)
+    print("Connected owner regions:", closest.total_region_count)
+    print("Secondary regions:", closest.secondary_region_count)
     print(
-        "Exact-tie vertices:",
-        result.region_result.exact_tie_result.exact_tie_vertex_count,
+        "Global Owner:",
+        global_assignment.global_owner_joint.split("|")[-1]
+        if global_assignment.global_owner_enabled
+        else "<none>",
     )
     print(
-        "Exact-tie components:",
-        result.region_result.exact_tie_result.component_count,
+        "Global Owner reassigned vertices:",
+        global_assignment.reassigned_vertex_count,
     )
+    print("Ownership boundary edges:", loops.boundary_edge_count)
+    print("Relevant closed loops:", loops.discovered_loop_count)
+    print("Maya polySelect calls:", loops.maya_polyselect_call_count)
+    print("Applied closed loops:", loops.applied_loop_count)
+    print("Closed-loop changed vertices:", loops.changed_vertex_count)
+    print("Primary opposite axis:", loops.axis_context.primary_axis)
     print("Final blocking owner rows:", result.blocking_owner_indices.size)
     print("Smoothing Blend:", result.smoothing_blend)
     print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
     print("Smoothing mixed vertices:", result.smoothing_mixed_vertex_count)
+    print(
+        "Stored maximum weight difference:",
+        result.stored_maximum_weight_difference,
+    )
     print(
         "Owner below maximum after:",
         len(result.smoothing_result.owner_maximum_result.owner_below_maximum_after),
@@ -246,10 +258,10 @@ def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
     print("Elapsed seconds:", round(result.elapsed_seconds, 6))
 
 
-def _final_ownership_maps(region_result, owner_indices):
+def _final_ownership_maps(influences, owner_indices):
     owner_vertex_ids = {}
     ownership_counts = {}
-    for influence_index, joint in enumerate(region_result.influences):
+    for influence_index, joint in enumerate(influences):
         vertex_ids = tuple(
             int(value)
             for value in np.where(owner_indices == int(influence_index))[0].tolist()
@@ -259,29 +271,37 @@ def _final_ownership_maps(region_result, owner_indices):
     return owner_vertex_ids, ownership_counts
 
 
-def _weights_in_skin_order(adapter, region_result, region_weights):
+def _weights_in_skin_order(
+    adapter,
+    ownership_influences,
+    vertex_count,
+    ownership_weights,
+):
     skin_influences = tuple(adapter.influences())
     skin_column_by_joint = {
         joint: column for column, joint in enumerate(skin_influences)
     }
     missing = [
         joint
-        for joint in region_result.influences
+        for joint in ownership_influences
         if joint not in skin_column_by_joint
     ]
     if missing:
         raise RuntimeError(
-            "Created skinCluster is missing Region influences:\n{}".format(
+            "Created skinCluster is missing ownership influences:\n{}".format(
                 "\n".join(missing)
             )
         )
 
     ordered = np.zeros(
-        (region_result.vertex_count, len(skin_influences)),
+        (int(vertex_count), len(skin_influences)),
         dtype=np.float64,
     )
-    for region_column, joint in enumerate(region_result.influences):
-        ordered[:, skin_column_by_joint[joint]] = region_weights[:, region_column]
+    for ownership_column, joint in enumerate(ownership_influences):
+        ordered[:, skin_column_by_joint[joint]] = ownership_weights[
+            :,
+            ownership_column,
+        ]
     return ordered
 
 
@@ -332,40 +352,16 @@ def _validate_stored_weights(adapter, expected, maximum_influences):
             )
         )
 
+    return maximum_difference
 
-def _owner_distances(region_result, owner_indices):
+
+def _owner_distances(context, owner_indices):
     delta = (
-        np.asarray(region_result.vertex_positions, dtype=np.float64)
-        - np.asarray(region_result.influence_positions, dtype=np.float64)[owner_indices]
+        np.asarray(context.vertex_positions, dtype=np.float64)
+        - np.asarray(context.influence_positions, dtype=np.float64)[owner_indices]
     )
     squared = np.einsum("vi,vi->v", delta, delta)
     return np.sqrt(squared)
-
-
-def _build_diagnostics(region_result, owner_vertex_ids):
-    reassigned = set(region_result.reassigned_vertex_ids)
-    result = []
-    for item in region_result.diagnostics:
-        owned_ids = owner_vertex_ids[item.joint]
-        messages = []
-        if not owned_ids:
-            messages.append("zero final ownership")
-        if item.co_primary_region_count:
-            messages.append("contains valid co-primary region")
-        result.append(
-            InfluenceAutomaticDiagnostic(
-                joint=item.joint,
-                ownership_count=len(owned_ids),
-                connected_region_count=item.connected_region_count,
-                primary_region_count=item.primary_region_count,
-                co_primary_region_count=item.co_primary_region_count,
-                reassigned_vertex_count=sum(
-                    int(vertex_id in reassigned) for vertex_id in owned_ids
-                ),
-                messages=tuple(messages),
-            )
-        )
-    return tuple(result)
 
 
 def _restore_selection(selection_before):

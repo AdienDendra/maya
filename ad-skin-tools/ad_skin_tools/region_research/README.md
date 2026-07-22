@@ -1,33 +1,35 @@
-# Region Ownership Research
+# Region Ownership Pipeline
 
-This package follows one explicit ownership pipeline:
+This package owns the production blocking architecture used by **Bind Skin**.
 
-1. `closest_region_ownership.py`
-   - exact closest joint per vertex
-   - deterministic exact-distance tie resolution
-   - connected owner regions
-   - primary and secondary region classification
-2. `secondary_surface_facing.py`
+1. `mesh_context.py`
+   - captures mesh positions, joint pivots, and vertex adjacency once
+2. `exact_distance_ties.py`
+   - resolves exact closest-distance ties deterministically
+3. `closest_region_ownership.py`
+   - assigns the closest joint
+   - builds connected owner regions
+   - separates primary and secondary regions
+4. `secondary_surface_facing.py`
    - runs only when a Global Owner is tagged
    - queries only secondary-region anchor vertices
-   - keeps co-primary and ambiguous secondary regions
-   - marks detached secondary regions
-3. `global_owner_assignment.py`
-   - sends detached secondary vertices to the one tagged Global Owner
-   - preserves the exact closest map when no Global Owner is tagged
-4. `closed_loop_ownership.py`
+   - protects co-primary and ambiguous secondary regions
+   - classifies detached secondary regions
+5. `global_owner_assignment.py`
+   - assigns detached secondary vertices to the tagged Global Owner
+   - leaves closest ownership unchanged when no Global Owner is tagged
+6. `closed_loop_ownership.py`
    - scans mesh edges once
-   - queries Maya edge loops only from ownership-boundary edges
+   - discovers loops only from ownership-boundary edges
    - applies two-owner aggregate-distance consensus
    - preserves supported opposite pairs
    - preserves exact ties, multi-owner loops, and conflicting proposals
-5. `ownership_pipeline.py`
-   - orchestrates the complete final hard-owner map
-   - never creates or writes a skinCluster
-6. `visual_bind.py`
-   - creates one smoke-test skinCluster
-   - writes the final hard-owner map exactly once
-   - validates Maya's stored one-owner weights
+7. `ownership_pipeline.py`
+   - produces one final hard-owner map without writing skin weights
 
-The old boundary-contact and reassignment experiments were removed. Production `Bind Skin`
-is still untouched until this complete visual result is approved.
+`core/smoothed_automatic_bind.py` consumes that final owner map, optionally runs
+the shared smoothing solver, creates one skinCluster, and writes one final weight
+matrix.
+
+The legacy Region package remains only for workflows that have not yet been
+migrated, including Add Influence.

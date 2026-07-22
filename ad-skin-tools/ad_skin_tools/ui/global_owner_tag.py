@@ -1,11 +1,20 @@
-"""Exclusive Global Owner tag and Maya-style locked-row highlighting."""
+"""Exclusive Global Owner tag and joint-list visual states."""
 
 import builtins
+import os
 
 import maya.cmds as cmds
 
 
-_HIGHLIGHT_TEXT_COLOR = (1.0, 0.78, 0.15)
+_GLOBAL_OWNER_TEXT_COLOR = (1.0, 0.78, 0.15)
+_LOCKED_ICON_PATH = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "resources",
+        "lock_yellow.png",
+    )
+).replace("\\", "/")
 
 _TOOL_WINDOW = None
 _JOINT_LIST = None
@@ -14,7 +23,7 @@ _ORIGINAL_POPULATE_CONTEXT_MENU = None
 
 
 def install(tool_window_module, joint_list_module) -> None:
-    """Install idempotent joint-list wrappers for Global Owner and lock colors."""
+    """Install idempotent wrappers for Global Owner and lock visualization."""
 
     global _TOOL_WINDOW
     global _JOINT_LIST
@@ -43,12 +52,13 @@ def install(tool_window_module, joint_list_module) -> None:
 
 
 def set_joint_list(joints) -> None:
-    """Render the normal list, then highlight Global Owner and locked rows yellow."""
+    """Render the normal list, then apply distinct Global Owner and lock visuals."""
 
     normalized = _TOOL_WINDOW._unique_joint_paths(joints)
     _normalize_global_owner_state(normalized)
     _ORIGINAL_SET_JOINT_LIST(normalized)
-    _render_highlight_colors(normalized)
+    _render_global_owner_text(normalized)
+    _render_locked_icons(normalized)
 
 
 def global_owner_joint():
@@ -157,13 +167,33 @@ def _normalize_global_owner_state(normalized_joints) -> None:
     state["global_owner_mesh_shape"] = None
 
 
-def _render_highlight_colors(joints) -> None:
-    control = _TOOL_WINDOW.CTRL_JOINT_LIST
-    global_owner = _TOOL_WINDOW._STATE.get("global_owner_joint")
-    path_to_item = _TOOL_WINDOW._STATE.get("joint_path_to_item", {})
+def _render_global_owner_text(joints) -> None:
+    joint = _TOOL_WINDOW._STATE.get("global_owner_joint")
+    if not joint or joint not in joints:
+        return
 
+    control = _TOOL_WINDOW.CTRL_JOINT_LIST
+    item_id = _TOOL_WINDOW._STATE.get("joint_path_to_item", {}).get(joint)
+    if not item_id or not _JOINT_LIST._tree_item_exists(control, item_id):
+        return
+
+    cmds.treeView(
+        control,
+        edit=True,
+        textColor=(item_id,) + _GLOBAL_OWNER_TEXT_COLOR,
+    )
+
+
+def _render_locked_icons(joints) -> None:
+    """Replace only locked button images; row text remains in its normal state."""
+
+    if not os.path.isfile(_LOCKED_ICON_PATH):
+        return
+
+    control = _TOOL_WINDOW.CTRL_JOINT_LIST
+    path_to_item = _TOOL_WINDOW._STATE.get("joint_path_to_item", {})
     for joint in joints:
-        if joint != global_owner and not _JOINT_LIST.joint_is_locked(joint):
+        if not _JOINT_LIST.joint_is_locked(joint):
             continue
         item_id = path_to_item.get(joint)
         if not item_id or not _JOINT_LIST._tree_item_exists(control, item_id):
@@ -171,5 +201,5 @@ def _render_highlight_colors(joints) -> None:
         cmds.treeView(
             control,
             edit=True,
-            textColor=(item_id,) + _HIGHLIGHT_TEXT_COLOR,
+            image=(item_id, 1, _LOCKED_ICON_PATH),
         )
