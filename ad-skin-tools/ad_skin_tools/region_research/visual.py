@@ -11,6 +11,9 @@ from ad_skin_tools.region_research.boundary_contacts import (
 from ad_skin_tools.region_research.nearest_regions import (
     NearestRegionResearchResult,
 )
+from ad_skin_tools.region_research.single_candidate_reassignment import (
+    SingleCandidateReassignmentResult,
+)
 
 
 def select_exact_ties(result: NearestRegionResearchResult) -> None:
@@ -158,6 +161,82 @@ def select_unassigned_contact_pair(
     )
 
 
+def select_stage_03_changed_vertices(
+    result: SingleCandidateReassignmentResult,
+) -> None:
+    select_vertex_ids(
+        result.stage_02.stage_01.context.mesh_transform,
+        result.changed_vertex_ids,
+    )
+
+
+def select_stage_03_proposal(
+    result: SingleCandidateReassignmentResult,
+    source_joint: str,
+    source_region_index: int,
+) -> None:
+    proposal = _stage_03_proposal(
+        result,
+        source_joint,
+        source_region_index,
+    )
+    select_vertex_ids(
+        result.stage_02.stage_01.context.mesh_transform,
+        proposal.vertex_ids,
+    )
+
+
+def select_stage_03_recipient(
+    result: SingleCandidateReassignmentResult,
+    target_joint: str,
+) -> None:
+    requested = str(target_joint)
+    short_name = requested.split("|")[-1]
+    matches = [
+        proposal
+        for proposal in result.proposals
+        if proposal.target_joint == requested
+        or proposal.target_joint.split("|")[-1] == short_name
+    ]
+    if not matches:
+        raise RuntimeError(
+            "No Stage 03 proposal targets this joint:\n{}".format(target_joint)
+        )
+
+    full_targets = {proposal.target_joint for proposal in matches}
+    if len(full_targets) != 1:
+        raise RuntimeError(
+            "Target joint short name is ambiguous. Use a full DAG path:\n{}".format(
+                target_joint
+            )
+        )
+
+    select_vertex_ids(
+        result.stage_02.stage_01.context.mesh_transform,
+        tuple(
+            vertex_id
+            for proposal in matches
+            for vertex_id in proposal.vertex_ids
+        ),
+    )
+
+
+def select_stage_03_deferred_region(
+    result: SingleCandidateReassignmentResult,
+    source_joint: str,
+    source_region_index: int,
+) -> None:
+    region = _stage_03_deferred_region(
+        result,
+        source_joint,
+        source_region_index,
+    )
+    select_vertex_ids(
+        result.stage_02.stage_01.context.mesh_transform,
+        region.vertex_ids,
+    )
+
+
 def select_vertex_ids(mesh_transform: str, vertex_ids: Iterable[int]) -> None:
     values = np.asarray(tuple(int(value) for value in vertex_ids), dtype=np.int32)
     cmds.select(clear=True)
@@ -244,5 +323,59 @@ def _contact_for_joint(region, contact_joint):
     raise RuntimeError(
         "Contact joint short name is ambiguous. Use a full DAG path:\n{}".format(
             contact_joint
+        )
+    )
+
+
+def _stage_03_proposal(result, source_joint, source_region_index):
+    requested = str(source_joint)
+    short_name = requested.split("|")[-1]
+    source_region_index = int(source_region_index)
+    matches = [
+        proposal
+        for proposal in result.proposals
+        if proposal.source_region_index == source_region_index
+        and (
+            proposal.source_joint == requested
+            or proposal.source_joint.split("|")[-1] == short_name
+        )
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(
+            "Region is not part of the Stage 03 proposals.\n\n"
+            "Joint: {}\nRegion: {}".format(source_joint, source_region_index)
+        )
+    raise RuntimeError(
+        "Source joint short name is ambiguous. Use a full DAG path:\n{}".format(
+            source_joint
+        )
+    )
+
+
+def _stage_03_deferred_region(result, source_joint, source_region_index):
+    requested = str(source_joint)
+    short_name = requested.split("|")[-1]
+    source_region_index = int(source_region_index)
+    matches = [
+        region
+        for region in result.deferred_regions
+        if region.source_region_index == source_region_index
+        and (
+            region.source_joint == requested
+            or region.source_joint.split("|")[-1] == short_name
+        )
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(
+            "Region is not part of the Stage 03 deferred set.\n\n"
+            "Joint: {}\nRegion: {}".format(source_joint, source_region_index)
+        )
+    raise RuntimeError(
+        "Source joint short name is ambiguous. Use a full DAG path:\n{}".format(
+            source_joint
         )
     )
