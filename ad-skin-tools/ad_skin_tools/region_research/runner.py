@@ -134,13 +134,30 @@ def get_last_stage_03_result() -> SingleCandidateReassignmentResult:
 
 
 def print_stage_01_report(result: NearestRegionResearchResult) -> None:
+    nearest = result.nearest
+    resolution = nearest.tie_resolution
+
     print("\n[AD Skin Tool - Region Research / Stage 01]")
     print("Mesh:", result.context.mesh_transform)
     print("Vertices:", result.context.vertex_count)
     print("Faces:", result.context.face_count)
     print("Edges:", result.context.edge_count)
     print("Influences:", result.context.influence_count)
-    print("Exact-tie vertices:", result.nearest.exact_tie_vertex_count)
+    print("Raw exact-tie vertices:", nearest.exact_tie_vertex_count)
+    print(
+        "  resolved by topology:",
+        len(resolution.resolved_by_topology_vertex_ids),
+    )
+    print(
+        "  resolved by fewer owned vertices:",
+        len(resolution.resolved_by_fewer_owned_vertices_vertex_ids),
+    )
+    print(
+        "  resolved by stable joint key:",
+        len(resolution.resolved_by_stable_joint_key_vertex_ids),
+    )
+    print("  topology propagation passes:", resolution.topology_pass_count)
+    print("Remaining unassigned vertices:", nearest.remaining_unassigned_vertex_count)
     print("Connected owner regions:", result.total_region_count)
     print("Secondary regions:", result.secondary_region_count)
     print(
@@ -150,7 +167,9 @@ def print_stage_01_report(result: NearestRegionResearchResult) -> None:
     print("\nTimings:")
     print("  scene capture:", round(result.context.scene_capture_seconds, 6))
     print("  adjacency build:", round(result.context.adjacency_seconds, 6))
-    print("  exact nearest:", round(result.nearest.elapsed_seconds, 6))
+    print("  exact nearest distance:", round(nearest.distance_seconds, 6))
+    print("  exact-tie resolution:", round(resolution.elapsed_seconds, 6))
+    print("  exact nearest total:", round(nearest.elapsed_seconds, 6))
     print("  connected regions:", round(result.connectivity_seconds, 6))
     print("  total:", round(result.elapsed_seconds, 6))
     print("\nPer influence:")
