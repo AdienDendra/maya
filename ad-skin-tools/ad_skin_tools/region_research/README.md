@@ -7,27 +7,44 @@ Production Bind Skin and Add Influence remain untouched.
 Joint input is always a flat list. Joint hierarchy, parent-child relationships,
 selection order, and joint names do not participate in the Region mathematics.
 
-## Stage 01: exact nearest regions
+## Stage 01: complete hard ownership before connectivity
 
-Stage 01:
+Stage 01 now runs in this order:
 
-1. captures mesh vertices and joint pivots in world space;
-2. builds direct vertex adjacency once;
-3. assigns only vertices with one unique exact-nearest joint pivot;
-4. splits each owner's vertices into connected topology regions.
+1. capture mesh vertices and joint pivots in world space;
+2. build direct vertex adjacency once;
+3. calculate exact nearest-distance candidates;
+4. resolve every exact-distance tie;
+5. verify that no vertex remains unassigned;
+6. split each owner's completed vertex set into connected topology regions.
+
+Exact ties are resolved before connectivity because an unassigned tie vertex can
+artificially split one valid owner region into multiple disconnected regions.
+
+The tie resolver is pragmatic and deterministic:
+
+1. direct-neighbour majority among the tied candidates;
+2. simultaneous topology propagation through connected tie strips;
+3. candidate with fewer frozen pre-resolution owned vertices;
+4. stable joint world-position key, then Maya UUID as the mechanical final key.
 
 The component containing the owner's exact closest owned vertex is marked as the
-primary region. Other connected components are secondary regions. Exact-distance
-ties remain unassigned and visible.
+primary region. Other connected components are secondary regions.
+
+Stage 01 guarantees:
+
+```python
+np.all(stage_01.nearest.owner_indices >= 0)
+```
 
 ## Stage 02: boundary candidate owners
 
-Stage 02 preserves every Stage 01 owner. For each secondary region it measures:
+Stage 02 preserves every completed Stage 01 owner. For each secondary region it
+measures:
 
 1. boundary vertices;
 2. assigned owners touching the boundary through direct mesh edges;
-3. contact-edge counts for each candidate owner;
-4. edges touching exact-tie vertices that remain unassigned.
+3. contact-edge counts for each candidate owner.
 
 Stage 02 does not move vertices. Its main result is the set of topology-valid
 candidate owners. Contact-edge counts remain diagnostic evidence, not a final
@@ -36,17 +53,14 @@ ownership decision.
 ## Stage 03: conservative single-candidate proposals
 
 Stage 03 creates a copied proposal owner map. A whole secondary region is changed
-only when:
+only when exactly one assigned candidate owner touches its boundary.
 
-1. exactly one assigned candidate owner touches its boundary; and
-2. no unassigned exact-tie vertex touches that boundary.
+Regions with multiple candidates or no assigned candidate remain deferred.
+Stage 03 does not create or edit a skinCluster and does not modify Stage 01 or
+Stage 02 data.
 
-Regions with multiple candidates, no assigned candidate, or unassigned boundary
-contact remain deferred. Stage 03 does not create or edit a skinCluster and does
-not modify Stage 01 or Stage 02 data.
-
-Stage 03 is one simultaneous proposal pass. It does not iterate or recompute
-connected regions yet.
+Stage 03 treats any unassigned boundary as an invariant failure because exact ties
+must already be resolved before connected regions are built.
 
 ## Maya usage
 
@@ -56,14 +70,18 @@ import importlib
 
 import ad_skin_tools.region_research.runner as rr
 import ad_skin_tools.region_research.visual as rv
+import ad_skin_tools.region_research.exact_tie_visual as rtv
 
 importlib.reload(rr)
 importlib.reload(rv)
+importlib.reload(rtv)
 
 mesh = "body_geo"
 joints = cmds.ls(selection=True, long=True, type="joint") or []
 
 stage_03 = rr.run_stage_03(mesh, joints)
+stage_02 = stage_03.stage_02
+stage_01 = stage_02.stage_01
 ```
 
 The selected joints may be independent or come from unrelated hierarchies.
@@ -84,12 +102,26 @@ stage_02 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_02
 stage_03 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_03
 ```
 
-## Visual selection
+## Exact-tie visual selection
+
+```python
+rtv.select_all_exact_ties(stage_01)
+rtv.select_ties_resolved_by_topology(stage_01)
+rtv.select_ties_resolved_by_fewer_owned_vertices(stage_01)
+rtv.select_ties_resolved_by_stable_joint_key(stage_01)
+```
+
+Inspect one original tie vertex:
+
+```python
+rtv.print_exact_tie_vertex(stage_01, 1234)
+```
+
+## Region visual selection
 
 Stage 01:
 
 ```python
-rv.select_exact_ties(stage_01)
 rv.select_all_secondary_regions(stage_01)
 rv.select_owner(stage_01, "jointA")
 rv.select_primary(stage_01, "jointA")
@@ -121,7 +153,6 @@ The research pipeline currently stops before:
 
 - resolving multiple boundary candidates;
 - resolving topology-isolated shells;
-- resolving exact-distance ties;
 - iterating proposals until stable;
 - creating hard skin weights;
 - smoothing.
