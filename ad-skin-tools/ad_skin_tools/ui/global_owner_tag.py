@@ -1,16 +1,11 @@
-"""Exclusive Global Owner tag for the AD Skin Tool joint list.
-
-The tag is UI state only in v10.3. It does not change the production Bind Skin
-button. The v10.3 smoke test reads this state and uses it as the destination for
-secondary regions classified as detached by facing.
-"""
+"""Exclusive Global Owner tag and Maya-style locked-row highlighting."""
 
 import builtins
 
 import maya.cmds as cmds
 
 
-_GLOBAL_OWNER_TEXT_COLOR = (1.0, 0.78, 0.15)
+_HIGHLIGHT_TEXT_COLOR = (1.0, 0.78, 0.15)
 
 _TOOL_WINDOW = None
 _JOINT_LIST = None
@@ -19,7 +14,7 @@ _ORIGINAL_POPULATE_CONTEXT_MENU = None
 
 
 def install(tool_window_module, joint_list_module) -> None:
-    """Install one idempotent wrapper around the active joint-list module."""
+    """Install idempotent joint-list wrappers for Global Owner and lock colors."""
 
     global _TOOL_WINDOW
     global _JOINT_LIST
@@ -48,12 +43,12 @@ def install(tool_window_module, joint_list_module) -> None:
 
 
 def set_joint_list(joints) -> None:
-    """Render the normal list, then paint the exclusive Global Owner yellow."""
+    """Render the normal list, then highlight Global Owner and locked rows yellow."""
 
     normalized = _TOOL_WINDOW._unique_joint_paths(joints)
     _normalize_global_owner_state(normalized)
     _ORIGINAL_SET_JOINT_LIST(normalized)
-    _render_global_owner_color()
+    _render_highlight_colors(normalized)
 
 
 def global_owner_joint():
@@ -69,7 +64,7 @@ def set_selected_as_global_owner() -> None:
 
     try:
         _TOOL_WINDOW._require_not_busy()
-        _TOOL_WINDOW._require_loaded_mesh()
+        _TOOL_WINDOW._require_unskinned_mesh()
 
         selected = builtins.list(_JOINT_LIST.selected_joint_paths())
         if len(selected) != 1:
@@ -89,19 +84,17 @@ def set_selected_as_global_owner() -> None:
 
         set_joint_list(current_joints)
         _JOINT_LIST.select_joint_paths([joint])
-        _TOOL_WINDOW._info(
-            "Global Owner: {}".format(joint.split("|")[-1])
-        )
+        _TOOL_WINDOW._info("Global Owner: {}".format(joint.split("|")[-1]))
     except Exception as exc:
         _TOOL_WINDOW._show_error(exc)
 
 
 def clear_global_owner() -> None:
-    """Clear the Global Owner tag for the current loaded mesh."""
+    """Clear the Global Owner tag while the loaded mesh is still unskinned."""
 
     try:
         _TOOL_WINDOW._require_not_busy()
-        _TOOL_WINDOW._require_loaded_mesh()
+        _TOOL_WINDOW._require_unskinned_mesh()
 
         if not _TOOL_WINDOW._STATE.get("global_owner_joint"):
             cmds.warning("No Global Owner is currently set.")
@@ -109,29 +102,38 @@ def clear_global_owner() -> None:
 
         _TOOL_WINDOW._STATE["global_owner_joint"] = None
         _TOOL_WINDOW._STATE["global_owner_mesh_shape"] = None
-        set_joint_list(
-            builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
-        )
+        set_joint_list(builtins.list(_TOOL_WINDOW._STATE.get("joints", [])))
         _TOOL_WINDOW._info("Global Owner cleared.")
     except Exception as exc:
         _TOOL_WINDOW._show_error(exc)
 
 
 def _populate_joint_context_menu(menu, *args) -> None:
-    """Append Global Owner actions to the existing joint context menu."""
+    """Append Global Owner actions and disable them after Bind Skin."""
 
     _ORIGINAL_POPULATE_CONTEXT_MENU(menu, *args)
+    editable = _global_owner_is_editable()
     cmds.menuItem(divider=True, parent=menu)
     cmds.menuItem(
         label="Set As Global Owner",
         parent=menu,
+        enable=editable,
         command=lambda *_: set_selected_as_global_owner(),
     )
     cmds.menuItem(
         label="Clear Global Owner",
         parent=menu,
-        enable=bool(global_owner_joint()),
+        enable=bool(editable and global_owner_joint()),
         command=lambda *_: clear_global_owner(),
+    )
+
+
+def _global_owner_is_editable() -> bool:
+    state = _TOOL_WINDOW._STATE
+    return bool(
+        state.get("mesh_shape")
+        and not state.get("busy")
+        and not state.get("has_skin_cluster")
     )
 
 
@@ -155,20 +157,19 @@ def _normalize_global_owner_state(normalized_joints) -> None:
     state["global_owner_mesh_shape"] = None
 
 
-def _render_global_owner_color() -> None:
-    joint = _TOOL_WINDOW._STATE.get("global_owner_joint")
-    if not joint:
-        return
-
+def _render_highlight_colors(joints) -> None:
     control = _TOOL_WINDOW.CTRL_JOINT_LIST
-    item_id = _TOOL_WINDOW._STATE.get("joint_path_to_item", {}).get(joint)
-    if not item_id:
-        return
-    if not _JOINT_LIST._tree_item_exists(control, item_id):
-        return
+    global_owner = _TOOL_WINDOW._STATE.get("global_owner_joint")
+    path_to_item = _TOOL_WINDOW._STATE.get("joint_path_to_item", {})
 
-    cmds.treeView(
-        control,
-        edit=True,
-        textColor=(item_id,) + _GLOBAL_OWNER_TEXT_COLOR,
-    )
+    for joint in joints:
+        if joint != global_owner and not _JOINT_LIST.joint_is_locked(joint):
+            continue
+        item_id = path_to_item.get(joint)
+        if not item_id or not _JOINT_LIST._tree_item_exists(control, item_id):
+            continue
+        cmds.treeView(
+            control,
+            edit=True,
+            textColor=(item_id,) + _HIGHLIGHT_TEXT_COLOR,
+        )

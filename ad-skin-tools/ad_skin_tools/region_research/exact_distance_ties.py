@@ -1,9 +1,4 @@
-"""Resolve exact nearest-distance ties before Region connectivity is built.
-
-The resolver is intentionally pragmatic and deterministic. It first uses local
-mesh topology, then a frozen global owner-count balance, and finally a stable
-joint key. No joint hierarchy, joint name, or input ordering participates.
-"""
+"""Resolve exact closest-distance ties before connected regions are built."""
 
 from dataclasses import dataclass
 import time
@@ -11,7 +6,7 @@ from typing import Dict, Mapping, Tuple
 
 import numpy as np
 
-from ad_skin_tools.region_research.context import ResearchMeshContext
+from ad_skin_tools.region_research.mesh_context import MeshOwnershipContext
 
 
 RESOLVED_BY_TOPOLOGY = "topology_neighbour"
@@ -20,7 +15,7 @@ RESOLVED_BY_STABLE_JOINT_KEY = "stable_joint_key"
 
 
 @dataclass(frozen=True)
-class ExactTieResolutionResult:
+class ExactDistanceTieResult:
     owner_indices: np.ndarray
     candidate_indices_by_vertex: Dict[int, Tuple[int, ...]]
     resolved_by_topology_vertex_ids: Tuple[int, ...]
@@ -38,12 +33,12 @@ class ExactTieResolutionResult:
         return int(np.count_nonzero(self.owner_indices < 0))
 
 
-def resolve_exact_ties(
-    context: ResearchMeshContext,
+def resolve_exact_distance_ties(
+    context: MeshOwnershipContext,
     raw_owner_indices: np.ndarray,
     candidate_indices_by_vertex: Mapping[int, Tuple[int, ...]],
-) -> ExactTieResolutionResult:
-    """Resolve every raw exact tie before connected-owner regions are discovered."""
+) -> ExactDistanceTieResult:
+    """Resolve every exact tie deterministically before connectivity."""
 
     started = time.perf_counter()
     owners = np.asarray(raw_owner_indices, dtype=np.int32).copy()
@@ -62,26 +57,21 @@ def resolve_exact_ties(
             "Raw exact-tie owner map does not match the captured tie candidates."
         )
 
-    influence_count = context.influence_count
     assigned_owners = owners[owners >= 0]
     frozen_owner_counts = np.bincount(
         assigned_owners,
-        minlength=influence_count,
+        minlength=context.influence_count,
     ).astype(np.int64)
 
     unresolved = set(expected_unassigned)
     topology_resolved = []
     topology_pass_count = 0
 
-    # Proposals are applied simultaneously per pass so vertex traversal order does
-    # not affect propagation through a connected exact-tie strip.
     while unresolved:
         proposals = {}
-
         for vertex_id in sorted(unresolved):
             candidate_set = set(candidates[vertex_id])
             support_counts = {}
-
             for neighbour_id in context.adjacency[vertex_id]:
                 neighbour_owner = int(owners[int(neighbour_id)])
                 if neighbour_owner not in candidate_set:
@@ -89,10 +79,8 @@ def resolve_exact_ties(
                 support_counts[neighbour_owner] = (
                     support_counts.get(neighbour_owner, 0) + 1
                 )
-
             if not support_counts:
                 continue
-
             maximum_support = max(support_counts.values())
             winners = tuple(
                 owner_index
@@ -113,9 +101,6 @@ def resolve_exact_ties(
 
     fewer_owned_resolved = []
     stable_key_resolved = []
-
-    # The counts remain frozen throughout this fallback. Updating them per vertex
-    # would make the result depend on which tied vertex happened to be visited first.
     for vertex_id in sorted(unresolved):
         candidate_indices = candidates[vertex_id]
         minimum_count = min(
@@ -137,7 +122,6 @@ def resolve_exact_ties(
                 key=lambda owner_index: _stable_joint_key(context, owner_index),
             )
             stable_key_resolved.append(int(vertex_id))
-
         owners[vertex_id] = selected_owner
 
     if np.any(owners < 0):
@@ -148,7 +132,7 @@ def resolve_exact_ties(
             )
         )
 
-    return ExactTieResolutionResult(
+    return ExactDistanceTieResult(
         owner_indices=owners,
         candidate_indices_by_vertex=candidates,
         resolved_by_topology_vertex_ids=tuple(sorted(topology_resolved)),
@@ -161,7 +145,7 @@ def resolve_exact_ties(
     )
 
 
-def _stable_joint_key(context: ResearchMeshContext, influence_index: int):
+def _stable_joint_key(context: MeshOwnershipContext, influence_index: int):
     position = context.influence_positions[int(influence_index)]
     return (
         float(position[0]),

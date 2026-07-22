@@ -1,82 +1,38 @@
-"""Independent Region Research package for AD Skin Tool."""
+"""Clear ownership pipeline used to replace the legacy Region experiments."""
 
-from ad_skin_tools.region_research.boundary_contacts import (
-    BoundaryContactResearchResult,
-    BoundaryOwnerContact,
-    SecondaryRegionBoundary,
-    analyze_secondary_region_boundaries,
-)
-from ad_skin_tools.region_research.exact_tie_resolution import (
-    ExactTieResolutionResult,
-    RESOLVED_BY_FEWER_OWNED_VERTICES,
-    RESOLVED_BY_STABLE_JOINT_KEY,
-    RESOLVED_BY_TOPOLOGY,
-    resolve_exact_ties,
-)
-from ad_skin_tools.region_research.nearest_regions import (
+from ad_skin_tools.region_research.closest_region_ownership import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
-    NearestRegionResearchResult,
-    solve_nearest_regions,
+    ClosestRegionOwnershipResult,
+    solve_closest_region_ownership,
 )
-from ad_skin_tools.region_research.runner import (
-    get_last_result,
-    get_last_stage_01_result,
-    get_last_stage_02_result,
-    get_last_stage_03_result,
-    print_stage_01_report,
-    print_stage_02_report,
-    print_stage_03_report,
-    run_stage_01,
-    run_stage_02,
-    run_stage_02_from_stage_01,
-    run_stage_03,
-    run_stage_03_from_stage_02,
+from ad_skin_tools.region_research.closed_loop_ownership import (
+    ClosedLoopOwnershipResult,
+    resolve_closed_loop_ownership,
 )
-from ad_skin_tools.region_research.single_candidate_reassignment import (
-    DEFERRED_MULTIPLE_ASSIGNED_CONTACTS,
-    DEFERRED_NO_ASSIGNED_CONTACT,
-    PRESERVED_MULTIPLE_CONTACT_OWNERS,
-    PRESERVED_NO_EXTERNAL_CONTACT,
-    DeferredSecondaryRegion,
-    PreservedSecondaryRegion,
-    SingleCandidateProposal,
-    SingleCandidateReassignmentResult,
-    propose_single_candidate_reassignments,
+from ad_skin_tools.region_research.global_owner_assignment import (
+    GlobalOwnerAssignmentResult,
+    assign_detached_to_global_owner,
+)
+from ad_skin_tools.region_research.ownership_pipeline import (
+    OwnershipPipelineResult,
+    solve_ownership_pipeline,
+)
+from ad_skin_tools.region_research.secondary_surface_facing import (
+    SecondarySurfaceFacingResult,
+    classify_secondary_surface_facing,
 )
 
 
 __all__ = [
-    "BoundaryContactResearchResult",
-    "BoundaryOwnerContact",
     "DEFAULT_DISTANCE_CHUNK_SIZE",
-    "DEFERRED_MULTIPLE_ASSIGNED_CONTACTS",
-    "DEFERRED_NO_ASSIGNED_CONTACT",
-    "DeferredSecondaryRegion",
-    "ExactTieResolutionResult",
-    "NearestRegionResearchResult",
-    "PRESERVED_MULTIPLE_CONTACT_OWNERS",
-    "PRESERVED_NO_EXTERNAL_CONTACT",
-    "PreservedSecondaryRegion",
-    "RESOLVED_BY_FEWER_OWNED_VERTICES",
-    "RESOLVED_BY_STABLE_JOINT_KEY",
-    "RESOLVED_BY_TOPOLOGY",
-    "SecondaryRegionBoundary",
-    "SingleCandidateProposal",
-    "SingleCandidateReassignmentResult",
-    "analyze_secondary_region_boundaries",
-    "get_last_result",
-    "get_last_stage_01_result",
-    "get_last_stage_02_result",
-    "get_last_stage_03_result",
-    "print_stage_01_report",
-    "print_stage_02_report",
-    "print_stage_03_report",
-    "propose_single_candidate_reassignments",
-    "resolve_exact_ties",
-    "run_stage_01",
-    "run_stage_02",
-    "run_stage_02_from_stage_01",
-    "run_stage_03",
-    "run_stage_03_from_stage_02",
-    "solve_nearest_regions",
+    "ClosestRegionOwnershipResult",
+    "ClosedLoopOwnershipResult",
+    "GlobalOwnerAssignmentResult",
+    "OwnershipPipelineResult",
+    "SecondarySurfaceFacingResult",
+    "assign_detached_to_global_owner",
+    "classify_secondary_surface_facing",
+    "resolve_closed_loop_ownership",
+    "solve_closest_region_ownership",
+    "solve_ownership_pipeline",
 ]

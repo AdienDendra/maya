@@ -1,9 +1,4 @@
-"""Immutable Maya scene capture for Region Research.
-
-This package intentionally does not import anything from ``ad_skin_tools.region``.
-The research branch owns its scene reads and topology context so the old Region
-package can eventually be removed without leaving hidden dependencies.
-"""
+"""Capture immutable mesh, joint, and topology data for ownership solving."""
 
 from dataclasses import dataclass
 import time
@@ -15,7 +10,7 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class ResearchMeshContext:
+class MeshOwnershipContext:
     mesh_shape: str
     mesh_transform: str
     influences: Tuple[str, ...]
@@ -38,17 +33,17 @@ class ResearchMeshContext:
         return int(self.influence_positions.shape[0])
 
 
-def build_research_mesh_context(
+def build_mesh_ownership_context(
     mesh: str,
     joints: Sequence[str],
-) -> ResearchMeshContext:
-    """Capture one mesh, joint pivots, and direct vertex adjacency exactly once."""
+) -> MeshOwnershipContext:
+    """Capture positions and direct vertex adjacency exactly once."""
 
     started = time.perf_counter()
     mesh_shape, mesh_transform = _resolve_mesh(mesh)
     influences = _normalize_joint_paths(joints)
     if len(influences) < 2:
-        raise RuntimeError("Region Research requires at least two joints.")
+        raise RuntimeError("Ownership solving requires at least two joints.")
 
     selection = om.MSelectionList()
     selection.add(mesh_shape)
@@ -64,21 +59,18 @@ def build_research_mesh_context(
     influence_positions = np.empty((len(influences), 3), dtype=np.float64)
     influence_uuids = []
     for index, joint in enumerate(influences):
-        value = cmds.xform(
+        influence_positions[index] = cmds.xform(
             joint,
             query=True,
             worldSpace=True,
             translation=True,
         )
-        influence_positions[index] = value
-
         uuid_matches = cmds.ls(joint, uuid=True) or []
         if len(uuid_matches) != 1:
             raise RuntimeError(
                 "Unable to resolve one stable Maya UUID for joint:\n{}".format(joint)
             )
         influence_uuids.append(str(uuid_matches[0]))
-
     scene_capture_seconds = time.perf_counter() - capture_started
 
     adjacency_started = time.perf_counter()
@@ -90,14 +82,13 @@ def build_research_mesh_context(
         adjacency_sets[first].add(second)
         adjacency_sets[second].add(first)
         edge_iterator.next()
-
     adjacency = tuple(
         tuple(sorted(int(value) for value in neighbours))
         for neighbours in adjacency_sets
     )
     adjacency_seconds = time.perf_counter() - adjacency_started
 
-    return ResearchMeshContext(
+    return MeshOwnershipContext(
         mesh_shape=mesh_shape,
         mesh_transform=mesh_transform,
         influences=influences,

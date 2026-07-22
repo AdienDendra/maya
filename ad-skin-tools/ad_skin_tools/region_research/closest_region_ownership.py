@@ -1,9 +1,4 @@
-"""Stage 01: exact nearest ownership, tie resolution, and connected regions.
-
-Exact-distance ties are captured first, resolved deterministically, and only then
-used to build owner connectivity. This guarantees that an unassigned tie vertex
-cannot split one valid owner region into false secondary regions.
-"""
+"""Closest-distance ownership followed by connected primary/secondary regions."""
 
 from dataclasses import dataclass
 import time
@@ -11,13 +6,13 @@ from typing import Dict, Sequence, Tuple
 
 import numpy as np
 
-from ad_skin_tools.region_research.context import (
-    ResearchMeshContext,
-    build_research_mesh_context,
+from ad_skin_tools.region_research.exact_distance_ties import (
+    ExactDistanceTieResult,
+    resolve_exact_distance_ties,
 )
-from ad_skin_tools.region_research.exact_tie_resolution import (
-    ExactTieResolutionResult,
-    resolve_exact_ties,
+from ad_skin_tools.region_research.mesh_context import (
+    MeshOwnershipContext,
+    build_mesh_ownership_context,
 )
 
 
@@ -26,14 +21,14 @@ UNASSIGNED_OWNER = -1
 
 
 @dataclass(frozen=True)
-class ExactNearestResult:
+class ClosestDistanceResult:
     raw_owner_indices: np.ndarray
     owner_indices: np.ndarray
     minimum_squared_distances: np.ndarray
     exact_tie_counts: np.ndarray
     exact_tie_vertex_ids: Tuple[int, ...]
     exact_tie_candidate_indices: Dict[int, Tuple[int, ...]]
-    tie_resolution: ExactTieResolutionResult
+    tie_resolution: ExactDistanceTieResult
     distance_seconds: float
     elapsed_seconds: float
 
@@ -103,9 +98,9 @@ class InfluenceRegionSummary:
 
 
 @dataclass(frozen=True)
-class NearestRegionResearchResult:
-    context: ResearchMeshContext
-    nearest: ExactNearestResult
+class ClosestRegionOwnershipResult:
+    context: MeshOwnershipContext
+    closest: ClosestDistanceResult
     influence_summaries: Tuple[InfluenceRegionSummary, ...]
     owner_vertex_ids: Dict[str, Tuple[int, ...]]
     all_secondary_vertex_ids: Tuple[int, ...]
@@ -139,30 +134,29 @@ class NearestRegionResearchResult:
         )
 
 
-def solve_nearest_regions(
+def solve_closest_region_ownership(
     mesh: str,
     joints: Sequence[str],
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
-) -> NearestRegionResearchResult:
-    """Resolve exact nearest ownership before connected-region discovery."""
+) -> ClosestRegionOwnershipResult:
+    """Build the stable Stage 1 owner map and connected region summaries."""
 
     started = time.perf_counter()
     if int(distance_chunk_size) < 1:
         raise ValueError("distance_chunk_size must be at least 1.")
 
-    context = build_research_mesh_context(mesh=mesh, joints=joints)
-    nearest = solve_exact_nearest(
+    context = build_mesh_ownership_context(mesh=mesh, joints=joints)
+    closest = solve_exact_closest(
         context,
         distance_chunk_size=int(distance_chunk_size),
     )
-
-    if nearest.remaining_unassigned_vertex_count:
+    if closest.remaining_unassigned_vertex_count:
         raise RuntimeError(
-            "Region connectivity cannot run while exact-tie vertices are unassigned."
+            "Connected-region discovery cannot run with unassigned vertices."
         )
 
     connectivity_started = time.perf_counter()
-    summaries = _build_influence_region_summaries(context, nearest)
+    summaries = _build_influence_region_summaries(context, closest)
     connectivity_seconds = time.perf_counter() - connectivity_started
 
     owner_vertex_ids = {
@@ -177,9 +171,9 @@ def solve_nearest_regions(
         )
     )
 
-    return NearestRegionResearchResult(
+    return ClosestRegionOwnershipResult(
         context=context,
-        nearest=nearest,
+        closest=closest,
         influence_summaries=summaries,
         owner_vertex_ids=owner_vertex_ids,
         all_secondary_vertex_ids=all_secondary,
@@ -188,12 +182,10 @@ def solve_nearest_regions(
     )
 
 
-def solve_exact_nearest(
-    context: ResearchMeshContext,
+def solve_exact_closest(
+    context: MeshOwnershipContext,
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
-) -> ExactNearestResult:
-    """Find exact nearest candidates and resolve every tie before Region analysis."""
-
+) -> ClosestDistanceResult:
     started = time.perf_counter()
     distance_started = time.perf_counter()
     vertex_count = context.vertex_count
@@ -220,7 +212,6 @@ def solve_exact_nearest(
 
         minimum_squared[start:stop] = chunk_minimum
         tie_counts[start:stop] = chunk_tie_counts
-
         chunk_owners = np.full(stop - start, UNASSIGNED_OWNER, dtype=np.int32)
         chunk_owners[unique_mask] = chunk_argmin[unique_mask]
         raw_owner_indices[start:stop] = chunk_owners
@@ -236,28 +227,25 @@ def solve_exact_nearest(
             )
 
     distance_seconds = time.perf_counter() - distance_started
-
     if np.any(~np.isfinite(minimum_squared)):
-        raise RuntimeError("Exact nearest distance produced non-finite values.")
+        raise RuntimeError("Exact closest distance produced non-finite values.")
     if np.any(tie_counts < 1):
         raise RuntimeError("One or more vertices have no distance candidate.")
 
-    exact_tie_vertex_ids = tuple(sorted(tie_candidates))
-    resolution = resolve_exact_ties(
+    resolution = resolve_exact_distance_ties(
         context=context,
         raw_owner_indices=raw_owner_indices,
         candidate_indices_by_vertex=tie_candidates,
     )
-
     if resolution.remaining_unassigned_vertex_count:
-        raise RuntimeError("Exact-tie resolution did not define every vertex owner.")
+        raise RuntimeError("Exact tie resolution did not define every vertex owner.")
 
-    return ExactNearestResult(
+    return ClosestDistanceResult(
         raw_owner_indices=raw_owner_indices,
         owner_indices=resolution.owner_indices,
         minimum_squared_distances=minimum_squared,
         exact_tie_counts=tie_counts,
-        exact_tie_vertex_ids=exact_tie_vertex_ids,
+        exact_tie_vertex_ids=tuple(sorted(tie_candidates)),
         exact_tie_candidate_indices=tie_candidates,
         tie_resolution=resolution,
         distance_seconds=float(distance_seconds),
@@ -266,19 +254,18 @@ def solve_exact_nearest(
 
 
 def _build_influence_region_summaries(
-    context: ResearchMeshContext,
-    nearest: ExactNearestResult,
+    context: MeshOwnershipContext,
+    closest: ClosestDistanceResult,
 ) -> Tuple[InfluenceRegionSummary, ...]:
-    owners = np.asarray(nearest.owner_indices, dtype=np.int32)
-    influence_count = context.influence_count
-
+    owners = np.asarray(closest.owner_indices, dtype=np.int32)
     if np.any(owners < 0):
-        raise RuntimeError(
-            "Connected-region discovery received an incomplete owner map."
-        )
+        raise RuntimeError("Connected-region discovery received an incomplete map.")
 
     vertex_ids = np.arange(owners.shape[0], dtype=np.int32)
-    owner_counts = np.bincount(owners, minlength=influence_count).astype(np.int32)
+    owner_counts = np.bincount(
+        owners,
+        minlength=context.influence_count,
+    ).astype(np.int32)
     owner_order = vertex_ids[np.argsort(owners, kind="stable")]
     owner_offsets = np.concatenate(
         (
@@ -293,7 +280,6 @@ def _build_influence_region_summaries(
         stop = int(owner_offsets[influence_index + 1])
         raw_ids = tuple(int(value) for value in owner_order[start:stop].tolist())
         components = _connected_components(raw_ids, context.adjacency)
-
         if not components:
             summaries.append(
                 InfluenceRegionSummary(
@@ -310,7 +296,7 @@ def _build_influence_region_summaries(
         minima = tuple(
             float(
                 np.min(
-                    nearest.minimum_squared_distances[
+                    closest.minimum_squared_distances[
                         np.asarray(component, dtype=np.int32)
                     ]
                 )
@@ -324,7 +310,6 @@ def _build_influence_region_summaries(
             if float(minimum) == float(exact_primary_minimum)
         )
         primary_set = set(primary_indices)
-
         regions = tuple(
             ConnectedOwnerRegion(
                 influence_index=int(influence_index),
@@ -336,11 +321,6 @@ def _build_influence_region_summaries(
             )
             for region_index, component in enumerate(components)
         )
-        secondary_indices = tuple(
-            region_index
-            for region_index in range(len(regions))
-            if region_index not in primary_set
-        )
         summaries.append(
             InfluenceRegionSummary(
                 influence_index=int(influence_index),
@@ -348,10 +328,13 @@ def _build_influence_region_summaries(
                 raw_vertex_ids=raw_ids,
                 regions=regions,
                 primary_region_indices=primary_indices,
-                secondary_region_indices=secondary_indices,
+                secondary_region_indices=tuple(
+                    region_index
+                    for region_index in range(len(regions))
+                    if region_index not in primary_set
+                ),
             )
         )
-
     return tuple(summaries)
 
 
@@ -361,13 +344,11 @@ def _connected_components(
 ) -> Tuple[Tuple[int, ...], ...]:
     unseen = set(int(value) for value in raw_vertex_ids)
     components = []
-
     while unseen:
         seed = min(unseen)
         unseen.remove(seed)
         stack = [seed]
         component = []
-
         while stack:
             vertex_id = stack.pop()
             component.append(vertex_id)
@@ -375,9 +356,7 @@ def _connected_components(
                 if neighbour_id in unseen:
                     unseen.remove(neighbour_id)
                     stack.append(neighbour_id)
-
         components.append(tuple(sorted(component)))
-
     components.sort(key=lambda values: values[0])
     return tuple(components)
 

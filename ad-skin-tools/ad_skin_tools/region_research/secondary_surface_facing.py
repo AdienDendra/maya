@@ -1,10 +1,4 @@
-"""Optimized facing classification for Stage 01 secondary regions only.
-
-The old production Region facing module builds incident-face data for every mesh
-vertex. v10.3 deliberately avoids that cost: it finds exact local anchors only for
-Stage 01 secondary regions, queries connected faces only for those anchors, and
-caches each required polygon normal once.
-"""
+"""Classify only secondary owner regions from local surface-facing evidence."""
 
 from dataclasses import dataclass
 import time
@@ -13,8 +7,8 @@ from typing import Dict, Tuple
 import maya.api.OpenMaya as om
 import numpy as np
 
-from ad_skin_tools.region_research.nearest_regions import (
-    NearestRegionResearchResult,
+from ad_skin_tools.region_research.closest_region_ownership import (
+    ClosestRegionOwnershipResult,
 )
 
 
@@ -38,7 +32,7 @@ class AnchorFaceObservation:
 
 
 @dataclass(frozen=True)
-class SecondaryFacingDiagnostic:
+class SecondarySurfaceDiagnostic:
     influence_index: int
     joint: str
     region_index: int
@@ -65,9 +59,9 @@ class SecondaryFacingDiagnostic:
 
 
 @dataclass(frozen=True)
-class SecondaryFacingResult:
-    stage_01: NearestRegionResearchResult
-    diagnostics: Tuple[SecondaryFacingDiagnostic, ...]
+class SecondarySurfaceFacingResult:
+    closest_ownership: ClosestRegionOwnershipResult
+    diagnostics: Tuple[SecondarySurfaceDiagnostic, ...]
     co_primary_vertex_ids: Tuple[int, ...]
     detached_vertex_ids: Tuple[int, ...]
     ambiguous_vertex_ids: Tuple[int, ...]
@@ -111,17 +105,17 @@ class SecondaryFacingResult:
         return len(self.ambiguous_vertex_ids)
 
 
-def classify_secondary_facing(
-    stage_01: NearestRegionResearchResult,
-) -> SecondaryFacingResult:
-    """Classify only Stage 01 secondary regions as co-primary/detached/ambiguous."""
+def classify_secondary_surface_facing(
+    closest_ownership: ClosestRegionOwnershipResult,
+) -> SecondarySurfaceFacingResult:
+    """Query only exact anchors of secondary regions and cache face normals once."""
 
     started = time.perf_counter()
-    context = stage_01.context
+    context = closest_ownership.context
 
     pending = []
     all_anchor_ids = set()
-    for summary in stage_01.influence_summaries:
+    for summary in closest_ownership.influence_summaries:
         source_position = np.asarray(
             context.influence_positions[summary.influence_index],
             dtype=np.float64,
@@ -165,13 +159,7 @@ def classify_secondary_facing(
     normal_query_seconds = time.perf_counter() - normal_started
 
     diagnostics = []
-    for (
-        influence_index,
-        joint,
-        region_index,
-        vertex_ids,
-        anchor_ids,
-    ) in pending:
+    for influence_index, joint, region_index, vertex_ids, anchor_ids in pending:
         source_position = np.asarray(
             context.influence_positions[influence_index],
             dtype=np.float64,
@@ -184,7 +172,7 @@ def classify_secondary_facing(
             face_normals=face_normals,
         )
         diagnostics.append(
-            SecondaryFacingDiagnostic(
+            SecondarySurfaceDiagnostic(
                 influence_index=influence_index,
                 joint=joint,
                 region_index=region_index,
@@ -196,8 +184,8 @@ def classify_secondary_facing(
         )
 
     diagnostics_tuple = tuple(diagnostics)
-    return SecondaryFacingResult(
-        stage_01=stage_01,
+    return SecondarySurfaceFacingResult(
+        closest_ownership=closest_ownership,
         diagnostics=diagnostics_tuple,
         co_primary_vertex_ids=_vertices_for_classification(
             diagnostics_tuple,
@@ -275,7 +263,6 @@ def _build_observations(
             vertex_positions[int(anchor_vertex_id)],
             dtype=np.float64,
         ) - source_position
-
         for face_id in incident_faces.get(int(anchor_vertex_id), tuple()):
             dot_product, zero_bound, sign = _bounded_dot_sign(
                 face_normals[int(face_id)],
@@ -290,7 +277,6 @@ def _build_observations(
                     sign=sign,
                 )
             )
-
     observations.sort(key=lambda value: (value.anchor_vertex_id, value.face_id))
     return tuple(observations)
 
@@ -305,7 +291,6 @@ def _bounded_dot_sign(first, second):
         _DOT_PRODUCT_GAMMA_3
         * np.sum(np.abs(products), dtype=np.float64)
     )
-
     if dot_product > zero_bound:
         sign = 1
     elif dot_product < -zero_bound:
@@ -318,7 +303,6 @@ def _bounded_dot_sign(first, second):
 def _classify_observations(observations):
     if not observations:
         return AMBIGUOUS
-
     signs = tuple(value.sign for value in observations)
     if all(sign > 0 for sign in signs):
         return CO_PRIMARY
