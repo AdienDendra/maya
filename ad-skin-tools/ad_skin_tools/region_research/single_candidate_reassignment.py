@@ -2,7 +2,7 @@
 
 This stage never edits a skinCluster or the stage-one result. It copies the hard
 owner map and changes a whole secondary region only when Stage 02 found exactly
-one assigned boundary-contact owner and no unassigned boundary contact.
+one assigned boundary-contact owner.
 """
 
 from dataclasses import dataclass
@@ -18,7 +18,6 @@ from ad_skin_tools.region_research.boundary_contacts import (
 
 DEFERRED_NO_ASSIGNED_CONTACT = "no_assigned_boundary_contact"
 DEFERRED_MULTIPLE_ASSIGNED_CONTACTS = "multiple_assigned_boundary_contacts"
-DEFERRED_UNASSIGNED_BOUNDARY_CONTACT = "unassigned_boundary_contact"
 
 
 @dataclass(frozen=True)
@@ -86,6 +85,11 @@ def propose_single_candidate_reassignments(
         dtype=np.int32,
     ).copy()
 
+    if np.any(owners < 0):
+        raise RuntimeError(
+            "Stage 03 requires a complete owner map before reassignment proposals."
+        )
+
     proposals = []
     deferred = []
 
@@ -93,13 +97,10 @@ def propose_single_candidate_reassignments(
         contacts = region.owner_contacts
 
         if region.unassigned_edge_count:
-            deferred.append(
-                _deferred_region(
-                    region=region,
-                    reason=DEFERRED_UNASSIGNED_BOUNDARY_CONTACT,
-                )
+            raise RuntimeError(
+                "Stage 02 exposed an unassigned boundary after exact-tie resolution. "
+                "Stage 01 ownership invariants are broken."
             )
-            continue
 
         if not contacts:
             deferred.append(
