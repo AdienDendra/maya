@@ -29,7 +29,10 @@ The tie resolver is pragmatic and deterministic:
 4. stable joint world-position key, then Maya UUID as the mechanical final key.
 
 The component containing the owner's exact closest owned vertex is marked as the
-primary region. Other connected components are secondary regions.
+primary region. Other connected components are called secondary regions.
+
+Important: `secondary` is descriptive only. It means disconnected from the
+owner's primary component; it does not prove that the ownership is wrong.
 
 Stage 01 guarantees:
 
@@ -37,55 +40,41 @@ Stage 01 guarantees:
 np.all(stage_01.nearest.owner_indices >= 0)
 ```
 
-## Stage 02: boundary candidate owners
+## Stage 02: external boundary contacts
 
 Stage 02 preserves every completed Stage 01 owner. For each secondary region it
 measures:
 
 1. boundary vertices;
-2. assigned owners touching the boundary through direct mesh edges;
-3. contact-edge counts for each candidate owner.
+2. external owners touching the boundary through direct mesh edges;
+3. contact-edge counts for each touching owner.
 
-Stage 02 does not move vertices. Its main result is the set of topology-valid
-candidate owners. Contact-edge counts remain diagnostic evidence, not a final
-ownership decision.
+Stage 02 does not move vertices. External contacts describe local topology; they
+are not automatically replacement owners.
 
-## Stage 03: single-candidate proposals
+## Stage 03: conservative single-contact correction
 
-Stage 03 creates a copied proposal owner map. A whole secondary region is changed
-when exactly one assigned candidate owner touches its boundary.
+Stage 03 starts from a copy of the complete Stage 01 owner map.
 
-Regions with multiple candidates or no assigned candidate remain deferred.
-Stage 03 does not create or edit a skinCluster and does not modify Stage 01 or
-Stage 02 data.
+Current research rule:
 
-Stage 03 treats any unassigned boundary as an invariant failure because exact ties
-must already be resolved before connected regions are built.
+- exactly one external contact owner: propose moving the whole secondary region
+  to that owner;
+- multiple external contact owners: preserve the original source owner;
+- no external contact owner: preserve the original source owner.
 
-## Stage 04: multiple-candidate proposals
+The multiple-contact case is intentionally preserved. A valid source region can
+sit between two neighbouring ownerships. The finger test demonstrated this with
+`Rfing1BJNTENV` regions 1 and 2: both touch A and C but correctly remain owned by B.
 
-Stage 04 starts from the Stage 03 proposal owner map and resolves only secondary
-regions that touch more than one topology-valid candidate owner.
+The removed aggregate-distance experiment was invalid for this purpose. Stage 01
+already assigned every region vertex to its nearest joint. Comparing the source
+joint against other joints with the same point-to-pivot distance metric therefore
+cannot provide independent evidence for overriding the source ownership. Excluding
+the source joint from that comparison forced a false reassignment.
 
-Every candidate is scored against the complete connected region:
-
-```text
-aggregate squared distance =
-sum of squared distances from every region vertex to the candidate joint
-```
-
-The decision order is deterministic and contains no tuned threshold:
-
-1. unique minimum aggregate squared distance;
-2. unique largest boundary contact-edge count, only after an exact distance tie;
-3. candidate with fewer frozen Stage 01 owned vertices;
-4. stable joint world-position key, then Maya UUID.
-
-The whole region is reassigned as one unit. Stage 04 never splits vertices inside
-one connected secondary region between different targets.
-
-A region with no external topology candidate remains unresolved for a later
-topology-isolated-shell rule. Stage 04 still does not write Maya skin weights.
+Stage 03 still does not create or edit a skinCluster. It only returns a copied
+proposal owner map and visual diagnostics.
 
 ## Maya usage
 
@@ -96,28 +85,25 @@ import importlib
 import ad_skin_tools.region_research.runner as rr
 import ad_skin_tools.region_research.visual as rv
 import ad_skin_tools.region_research.exact_tie_visual as rtv
-import ad_skin_tools.region_research.multiple_candidate_visual as rmv
 
 importlib.reload(rr)
 importlib.reload(rv)
 importlib.reload(rtv)
-importlib.reload(rmv)
 
 mesh = "body_geo"
 joints = cmds.ls(selection=True, long=True, type="joint") or []
 
-stage_04 = rr.run_stage_04(mesh, joints)
-stage_03 = stage_04.stage_03
+stage_03 = rr.run_stage_03(mesh, joints)
 stage_02 = stage_03.stage_02
 stage_01 = stage_02.stage_01
 ```
 
 The selected joints may be independent or come from unrelated hierarchies.
 
-Continue from an existing Stage 03 result without repeating earlier work:
+Continue from an existing Stage 02 result without repeating earlier work:
 
 ```python
-stage_04 = rr.run_stage_04_from_stage_03(stage_03)
+stage_03 = rr.run_stage_03_from_stage_02(stage_02)
 ```
 
 Results are also stored in `builtins`:
@@ -128,7 +114,6 @@ import builtins
 stage_01 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_01
 stage_02 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_02
 stage_03 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_03
-stage_04 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_04
 ```
 
 ## Exact-tie visual selection
@@ -171,17 +156,11 @@ Stage 03:
 rv.select_stage_03_changed_vertices(stage_03)
 rv.select_stage_03_proposal(stage_03, "jointC", 2)
 rv.select_stage_03_recipient(stage_03, "jointB")
-rv.select_stage_03_deferred_region(stage_03, "jointC", 0)
+rv.select_stage_03_deferred_region(stage_03, "jointB", 1)
 ```
 
-Stage 04:
-
-```python
-rmv.select_changed_vertices(stage_04)
-rmv.select_proposal(stage_04, "jointB", 1)
-rmv.select_recipient(stage_04, "jointA")
-rmv.select_unresolved_region(stage_04, "jointC", 0)
-```
+The last helper retains its older name for compatibility; it selects a region
+whose source ownership is now intentionally preserved.
 
 Selection helpers only select Maya vertices. They do not change weights.
 
@@ -189,8 +168,7 @@ Selection helpers only select Maya vertices. They do not change weights.
 
 The research pipeline currently stops before:
 
-- resolving topology-isolated shells;
-- recomputing connectivity from the complete Stage 04 proposal owner map;
-- iterating proposals until stable;
+- recomputing connectivity from the Stage 03 proposal owner map;
+- validating whether another conservative correction pass is required;
 - creating hard skin weights;
 - smoothing.
