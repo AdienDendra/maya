@@ -1,13 +1,8 @@
-"""Stage 01: exact nearest-owner regions with visual diagnostics.
+"""Stage 01: exact nearest ownership, tie resolution, and connected regions.
 
-The stage deliberately stops before facing, fallback, loop, or smoothing logic.
-Its only questions are:
-
-1. Which joint pivot is the unique exact nearest owner of each vertex?
-2. For each owner, how many connected topology regions were produced?
-3. Which connected region contains that owner's exact closest owned vertex?
-
-Exact-distance ties remain unassigned and are exposed for visual selection.
+Exact-distance ties are captured first, resolved deterministically, and only then
+used to build owner connectivity. This guarantees that an unassigned tie vertex
+cannot split one valid owner region into false secondary regions.
 """
 
 from dataclasses import dataclass
@@ -20,6 +15,10 @@ from ad_skin_tools.region_research.context import (
     ResearchMeshContext,
     build_research_mesh_context,
 )
+from ad_skin_tools.region_research.exact_tie_resolution import (
+    ExactTieResolutionResult,
+    resolve_exact_ties,
+)
 
 
 DEFAULT_DISTANCE_CHUNK_SIZE = 16384
@@ -28,15 +27,23 @@ UNASSIGNED_OWNER = -1
 
 @dataclass(frozen=True)
 class ExactNearestResult:
+    raw_owner_indices: np.ndarray
     owner_indices: np.ndarray
     minimum_squared_distances: np.ndarray
     exact_tie_counts: np.ndarray
     exact_tie_vertex_ids: Tuple[int, ...]
+    exact_tie_candidate_indices: Dict[int, Tuple[int, ...]]
+    tie_resolution: ExactTieResolutionResult
+    distance_seconds: float
     elapsed_seconds: float
 
     @property
     def exact_tie_vertex_count(self) -> int:
         return len(self.exact_tie_vertex_ids)
+
+    @property
+    def remaining_unassigned_vertex_count(self) -> int:
+        return int(np.count_nonzero(self.owner_indices < 0))
 
 
 @dataclass(frozen=True)
@@ -137,7 +144,7 @@ def solve_nearest_regions(
     joints: Sequence[str],
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
 ) -> NearestRegionResearchResult:
-    """Run only exact nearest distance and connected-owner region discovery."""
+    """Resolve exact nearest ownership before connected-region discovery."""
 
     started = time.perf_counter()
     if int(distance_chunk_size) < 1:
@@ -148,6 +155,11 @@ def solve_nearest_regions(
         context,
         distance_chunk_size=int(distance_chunk_size),
     )
+
+    if nearest.remaining_unassigned_vertex_count:
+        raise RuntimeError(
+            "Region connectivity cannot run while exact-tie vertices are unassigned."
+        )
 
     connectivity_started = time.perf_counter()
     summaries = _build_influence_region_summaries(context, nearest)
@@ -180,13 +192,19 @@ def solve_exact_nearest(
     context: ResearchMeshContext,
     distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
 ) -> ExactNearestResult:
-    """Find unique exact nearest owners without building a sorted distance table."""
+    """Find exact nearest candidates and resolve every tie before Region analysis."""
 
     started = time.perf_counter()
+    distance_started = time.perf_counter()
     vertex_count = context.vertex_count
-    owner_indices = np.full(vertex_count, UNASSIGNED_OWNER, dtype=np.int32)
+    raw_owner_indices = np.full(
+        vertex_count,
+        UNASSIGNED_OWNER,
+        dtype=np.int32,
+    )
     minimum_squared = np.full(vertex_count, np.inf, dtype=np.float64)
     tie_counts = np.zeros(vertex_count, dtype=np.int32)
+    tie_candidates: Dict[int, Tuple[int, ...]] = {}
 
     for start in range(0, vertex_count, int(distance_chunk_size)):
         stop = min(start + int(distance_chunk_size), vertex_count)
@@ -202,22 +220,47 @@ def solve_exact_nearest(
 
         minimum_squared[start:stop] = chunk_minimum
         tie_counts[start:stop] = chunk_tie_counts
-        owner_indices[start:stop][unique_mask] = chunk_argmin[unique_mask]
+
+        chunk_owners = np.full(stop - start, UNASSIGNED_OWNER, dtype=np.int32)
+        chunk_owners[unique_mask] = chunk_argmin[unique_mask]
+        raw_owner_indices[start:stop] = chunk_owners
+
+        local_tie_rows = np.where(chunk_tie_counts > 1)[0].astype(np.int32)
+        for local_row in local_tie_rows.tolist():
+            vertex_id = int(start + int(local_row))
+            tie_candidates[vertex_id] = tuple(
+                int(value)
+                for value in np.where(exact_mask[int(local_row)])[0]
+                .astype(np.int32)
+                .tolist()
+            )
+
+    distance_seconds = time.perf_counter() - distance_started
 
     if np.any(~np.isfinite(minimum_squared)):
         raise RuntimeError("Exact nearest distance produced non-finite values.")
     if np.any(tie_counts < 1):
         raise RuntimeError("One or more vertices have no distance candidate.")
 
-    exact_tie_vertex_ids = tuple(
-        int(value)
-        for value in np.where(tie_counts > 1)[0].astype(np.int32).tolist()
+    exact_tie_vertex_ids = tuple(sorted(tie_candidates))
+    resolution = resolve_exact_ties(
+        context=context,
+        raw_owner_indices=raw_owner_indices,
+        candidate_indices_by_vertex=tie_candidates,
     )
+
+    if resolution.remaining_unassigned_vertex_count:
+        raise RuntimeError("Exact-tie resolution did not define every vertex owner.")
+
     return ExactNearestResult(
-        owner_indices=owner_indices,
+        raw_owner_indices=raw_owner_indices,
+        owner_indices=resolution.owner_indices,
         minimum_squared_distances=minimum_squared,
         exact_tie_counts=tie_counts,
         exact_tie_vertex_ids=exact_tie_vertex_ids,
+        exact_tie_candidate_indices=tie_candidates,
+        tie_resolution=resolution,
+        distance_seconds=float(distance_seconds),
         elapsed_seconds=float(time.perf_counter() - started),
     )
 
@@ -229,12 +272,14 @@ def _build_influence_region_summaries(
     owners = np.asarray(nearest.owner_indices, dtype=np.int32)
     influence_count = context.influence_count
 
-    valid_vertex_ids = np.where(owners >= 0)[0].astype(np.int32)
-    valid_owners = owners[valid_vertex_ids]
-    owner_counts = np.bincount(valid_owners, minlength=influence_count).astype(np.int32)
-    owner_order = valid_vertex_ids[
-        np.argsort(valid_owners, kind="stable")
-    ]
+    if np.any(owners < 0):
+        raise RuntimeError(
+            "Connected-region discovery received an incomplete owner map."
+        )
+
+    vertex_ids = np.arange(owners.shape[0], dtype=np.int32)
+    owner_counts = np.bincount(owners, minlength=influence_count).astype(np.int32)
+    owner_order = vertex_ids[np.argsort(owners, kind="stable")]
     owner_offsets = np.concatenate(
         (
             np.asarray([0], dtype=np.int64),
