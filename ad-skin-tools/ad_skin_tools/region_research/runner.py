@@ -12,10 +12,15 @@ from ad_skin_tools.region_research.nearest_regions import (
     NearestRegionResearchResult,
     solve_nearest_regions,
 )
+from ad_skin_tools.region_research.single_candidate_reassignment import (
+    SingleCandidateReassignmentResult,
+    propose_single_candidate_reassignments,
+)
 
 
 STAGE_01_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_01"
 STAGE_02_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_02"
+STAGE_03_RESULT_SLOT = "AD_SKIN_REGION_RESEARCH_STAGE_03"
 RESULT_SLOT = STAGE_01_RESULT_SLOT
 
 
@@ -65,6 +70,34 @@ def run_stage_02_from_stage_01(
     return result
 
 
+def run_stage_03(
+    mesh: str,
+    joints: Sequence[str],
+    distance_chunk_size: int = DEFAULT_DISTANCE_CHUNK_SIZE,
+) -> SingleCandidateReassignmentResult:
+    """Run stages one through three from fresh scene data."""
+
+    stage_02 = run_stage_02(
+        mesh=mesh,
+        joints=joints,
+        distance_chunk_size=int(distance_chunk_size),
+    )
+    return run_stage_03_from_stage_02(stage_02)
+
+
+def run_stage_03_from_stage_02(
+    stage_02: BoundaryContactResearchResult,
+) -> SingleCandidateReassignmentResult:
+    """Build conservative single-candidate proposals from Stage 02."""
+
+    result = propose_single_candidate_reassignments(stage_02)
+    setattr(builtins, STAGE_01_RESULT_SLOT, stage_02.stage_01)
+    setattr(builtins, STAGE_02_RESULT_SLOT, stage_02)
+    setattr(builtins, STAGE_03_RESULT_SLOT, result)
+    print_stage_03_report(result)
+    return result
+
+
 def get_last_result() -> NearestRegionResearchResult:
     """Backward-compatible alias for the last stage-one result."""
 
@@ -86,6 +119,16 @@ def get_last_stage_02_result() -> BoundaryContactResearchResult:
         raise RuntimeError(
             "No Region Research stage 02 result exists. Run run_stage_02 or "
             "run_stage_02_from_stage_01 first."
+        )
+    return result
+
+
+def get_last_stage_03_result() -> SingleCandidateReassignmentResult:
+    result = getattr(builtins, STAGE_03_RESULT_SLOT, None)
+    if result is None:
+        raise RuntimeError(
+            "No Region Research stage 03 result exists. Run run_stage_03 or "
+            "run_stage_03_from_stage_02 first."
         )
     return result
 
@@ -174,5 +217,47 @@ def print_stage_02_report(result: BoundaryContactResearchResult) -> None:
                 region.boundary_vertex_count,
                 contact_text,
                 dominant_names,
+            )
+        )
+
+
+def print_stage_03_report(result: SingleCandidateReassignmentResult) -> None:
+    print("\n[AD Skin Tool - Region Research / Stage 03]")
+    print("Single-candidate proposals:", result.proposal_count)
+    print("Deferred secondary regions:", result.deferred_region_count)
+    print("Proposed changed vertices:", result.changed_vertex_count)
+    print("Proposal analysis:", round(result.elapsed_seconds, 6))
+
+    print("\nProposals:")
+    if not result.proposals:
+        print("  none")
+    for proposal in result.proposals:
+        print(
+            "  {} region {} -> {} | vertices={} | contact_edges={}".format(
+                proposal.source_joint.split("|")[-1],
+                proposal.source_region_index,
+                proposal.target_joint.split("|")[-1],
+                proposal.vertex_count,
+                proposal.contact_edge_count,
+            )
+        )
+
+    print("\nDeferred:")
+    if not result.deferred_regions:
+        print("  none")
+    for region in result.deferred_regions:
+        candidate_names = [
+            joint.split("|")[-1]
+            for joint in region.candidate_joints
+        ]
+        print(
+            "  {} region {} | vertices={} | reason={} | candidates={} | "
+            "unassigned_edges={}".format(
+                region.source_joint.split("|")[-1],
+                region.source_region_index,
+                region.vertex_count,
+                region.reason,
+                candidate_names,
+                region.unassigned_edge_count,
             )
         )
