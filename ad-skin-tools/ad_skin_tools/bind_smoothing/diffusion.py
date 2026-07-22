@@ -1,11 +1,13 @@
-"""Topology diffusion for Bind Skin and Add Influence smoothing.
+"""Fast topology diffusion for Bind Skin, Add Influence, and Component Smooth.
 
 Blend is the fraction moved toward the connected-neighbour average in one
-iteration. Iterations is the exact number of Jacobi repetitions. No hidden
-multiplier is applied.
+iteration. Iterations is the exact number of Jacobi repetitions. The numerical
+result matches the previous dense implementation, but neighbour accumulation is
+performed with NumPy ``bincount`` and reusable matrix buffers.
 """
 
 from dataclasses import dataclass
+import time
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -20,7 +22,7 @@ MAXIMUM_ITERATIONS = 10
 
 @dataclass(frozen=True)
 class BindDiffusionResult:
-    """In-memory result and diagnostics for one diffusion solve."""
+    """Final diffused weights plus lightweight end-of-solve diagnostics."""
 
     weights: np.ndarray
     owner_indices: np.ndarray
@@ -34,10 +36,15 @@ class BindDiffusionResult:
     iteration_mixed_counts: Tuple[int, ...]
     active_influence_histogram: Tuple[Tuple[int, int], ...]
     maximum_row_sum_error: float
+    topology_setup_seconds: float
+    iteration_seconds: float
+    finalization_seconds: float
+    elapsed_seconds: float
 
     @property
     def relaxation(self) -> float:
-        """Compatibility alias for pre-v9.2 diagnostics."""
+        """Compatibility alias for older callers."""
+
         return self.blend
 
     @property
@@ -71,14 +78,14 @@ def diffuse_hard_ownership(
     mutable_vertex_ids: Optional[Sequence[int]] = None,
     relaxation: Optional[float] = None,
 ) -> BindDiffusionResult:
-    """Diffuse weights through connected polygon edges.
+    """Average neighbouring weights using exact artist-facing iterations.
 
-    Without ``initial_weights`` the solve starts from exact one-hot ownership.
-    ``mutable_vertex_ids`` can restrict updates to selected rows while all other
-    rows remain fixed boundary context. The legacy ``relaxation`` keyword is
-    accepted as an alias for Blend.
+    Rows outside ``mutable_vertex_ids`` remain fixed and still contribute to the
+    neighbour average. Expensive per-iteration diagnostic scans are deliberately
+    omitted; development validation evaluates the final matrix after the solve.
     """
 
+    started = time.perf_counter()
     if relaxation is not None:
         if float(blend) != DEFAULT_BLEND and float(blend) != float(relaxation):
             raise ValueError("Supply either blend or relaxation, not both.")
@@ -95,76 +102,60 @@ def diffuse_hard_ownership(
     )
     iterations = int(iterations)
     blend = float(blend)
-
-    baseline = initial.copy()
-    current = initial.copy()
-    degrees, source_ids, neighbour_ids = _build_edge_arrays(adjacency)
     tolerance = _numerical_tolerance(int(influence_count))
 
-    iteration_changed_counts = []
-    iteration_mixed_counts = []
+    baseline = initial
+    current = initial.copy()
 
-    for _ in range(iterations):
-        neighbour_sums = np.zeros_like(current)
-        if source_ids.size:
-            np.add.at(
-                neighbour_sums,
-                source_ids,
-                current[neighbour_ids],
-            )
+    topology_started = time.perf_counter()
+    degrees, source_ids, neighbour_ids, update_ids, update_all_rows = (
+        _build_update_topology(adjacency, mutable_ids)
+    )
+    topology_setup_seconds = time.perf_counter() - topology_started
 
-        neighbour_average = current.copy()
-        connected_mask = degrees > 0
-        neighbour_average[connected_mask] = (
-            neighbour_sums[connected_mask]
-            / degrees[connected_mask, np.newaxis]
-        )
+    iteration_started = time.perf_counter()
+    if iterations > 0 and blend > 0.0 and update_ids.size:
+        next_weights = np.empty_like(current)
+        neighbour_sums = np.empty_like(current)
+        keep_fraction = 1.0 - blend
 
-        next_weights = current.copy()
-        if mutable_ids.size:
-            next_weights[mutable_ids] = (
-                current[mutable_ids]
-                + blend
-                * (
-                    neighbour_average[mutable_ids]
-                    - current[mutable_ids]
+        if update_all_rows:
+            neighbour_scale = blend / degrees.astype(np.float64)
+            for _ in range(iterations):
+                _accumulate_neighbour_sums(
+                    neighbour_sums,
+                    current,
+                    source_ids,
+                    neighbour_ids,
                 )
-            )
-            next_weights[mutable_ids] = _normalize_rows(
-                next_weights[mutable_ids],
-                tolerance=tolerance,
-            )
-
-        next_weights[np.abs(next_weights) <= tolerance] = 0.0
-        current = next_weights
-
-        iteration_changed_counts.append(
-            int(
-                np.count_nonzero(
-                    np.any(
-                        np.abs(current - baseline) > tolerance,
-                        axis=1,
-                    )
+                np.multiply(current, keep_fraction, out=next_weights)
+                next_weights += neighbour_sums * neighbour_scale[:, np.newaxis]
+                current, next_weights = next_weights, current
+        else:
+            update_scale = blend / degrees[update_ids].astype(np.float64)
+            for _ in range(iterations):
+                _accumulate_neighbour_sums(
+                    neighbour_sums,
+                    current,
+                    source_ids,
+                    neighbour_ids,
                 )
-            )
-        )
-        iteration_mixed_counts.append(
-            int(
-                np.count_nonzero(
-                    np.count_nonzero(
-                        current > tolerance,
-                        axis=1,
-                    )
-                    > 1
+                next_weights[:] = current
+                next_weights[update_ids] = (
+                    current[update_ids] * keep_fraction
+                    + neighbour_sums[update_ids]
+                    * update_scale[:, np.newaxis]
                 )
-            )
-        )
+                current, next_weights = next_weights, current
+    iteration_seconds = time.perf_counter() - iteration_started
+
+    finalization_started = time.perf_counter()
+    current = _normalize_rows(current, tolerance=tolerance)
+    current[np.abs(current) <= tolerance] = 0.0
+    current = _normalize_rows(current, tolerance=tolerance)
 
     changed_vertex_ids = np.where(
-        np.any(
-            np.abs(current - baseline) > tolerance,
-            axis=1,
-        )
+        np.any(np.abs(current - baseline) > tolerance, axis=1)
     )[0].astype(np.int32)
 
     active_counts = np.count_nonzero(
@@ -172,7 +163,6 @@ def diffuse_hard_ownership(
         axis=1,
     ).astype(np.int32)
     mixed_vertex_ids = np.where(active_counts > 1)[0].astype(np.int32)
-
     dominant_owner_changed_vertex_ids = np.where(
         np.argmax(current, axis=1).astype(np.int32) != owners
     )[0].astype(np.int32)
@@ -195,6 +185,7 @@ def diffuse_hard_ownership(
         if row_sums.size
         else 0.0
     )
+    finalization_seconds = time.perf_counter() - finalization_started
 
     return BindDiffusionResult(
         weights=current,
@@ -212,11 +203,89 @@ def diffuse_hard_ownership(
             int(value)
             for value in dominant_owner_changed_vertex_ids.tolist()
         ),
-        iteration_changed_counts=tuple(iteration_changed_counts),
-        iteration_mixed_counts=tuple(iteration_mixed_counts),
+        iteration_changed_counts=tuple(),
+        iteration_mixed_counts=tuple(),
         active_influence_histogram=active_influence_histogram,
         maximum_row_sum_error=maximum_row_sum_error,
+        topology_setup_seconds=float(topology_setup_seconds),
+        iteration_seconds=float(iteration_seconds),
+        finalization_seconds=float(finalization_seconds),
+        elapsed_seconds=float(time.perf_counter() - started),
     )
+
+
+def _accumulate_neighbour_sums(
+    output,
+    current,
+    source_ids,
+    neighbour_ids,
+):
+    """Accumulate each influence column in compiled NumPy code."""
+
+    vertex_count, influence_count = current.shape
+    if not source_ids.size:
+        output.fill(0.0)
+        return
+
+    for influence_index in range(influence_count):
+        output[:, influence_index] = np.bincount(
+            source_ids,
+            weights=current[neighbour_ids, influence_index],
+            minlength=vertex_count,
+        )
+
+
+def _build_update_topology(adjacency, mutable_ids):
+    degrees = np.asarray(
+        [len(neighbours) for neighbours in adjacency],
+        dtype=np.int32,
+    )
+    vertex_count = len(adjacency)
+    all_rows_mutable = (
+        mutable_ids.size == vertex_count
+        and np.array_equal(
+            mutable_ids,
+            np.arange(vertex_count, dtype=np.int32),
+        )
+    )
+
+    if all_rows_mutable:
+        source_degrees = degrees
+        source_vertices = np.arange(vertex_count, dtype=np.int32)
+        neighbour_count = int(np.sum(source_degrees, dtype=np.int64))
+        neighbour_ids = np.fromiter(
+            (
+                int(neighbour_id)
+                for neighbours in adjacency
+                for neighbour_id in neighbours
+            ),
+            dtype=np.int32,
+            count=neighbour_count,
+        )
+    else:
+        source_vertices = mutable_ids
+        source_degrees = degrees[source_vertices]
+        neighbour_count = int(np.sum(source_degrees, dtype=np.int64))
+        neighbour_ids = np.fromiter(
+            (
+                int(neighbour_id)
+                for vertex_id in source_vertices.tolist()
+                for neighbour_id in adjacency[int(vertex_id)]
+            ),
+            dtype=np.int32,
+            count=neighbour_count,
+        )
+
+    source_ids = np.repeat(source_vertices, source_degrees)
+    if source_ids.size != neighbour_ids.size:
+        raise RuntimeError("Failed to flatten mesh adjacency consistently.")
+
+    update_ids = mutable_ids[degrees[mutable_ids] > 0]
+    update_all_rows = bool(
+        all_rows_mutable
+        and update_ids.size == vertex_count
+    )
+    return degrees, source_ids, neighbour_ids, update_ids, update_all_rows
 
 
 def _validate_inputs(
@@ -236,9 +305,7 @@ def _validate_inputs(
     if influence_count < 1:
         raise ValueError("influence_count must be at least 1.")
     if owners.size:
-        invalid_owner_mask = (
-            (owners < 0) | (owners >= influence_count)
-        )
+        invalid_owner_mask = (owners < 0) | (owners >= influence_count)
         if np.any(invalid_owner_mask):
             invalid_rows = np.where(invalid_owner_mask)[0][:20]
             raise ValueError(
@@ -248,8 +315,10 @@ def _validate_inputs(
 
     if len(adjacency) != owners.size:
         raise ValueError(
-            "Adjacency row count does not match owner_indices: {} != {}."
-            .format(len(adjacency), owners.size)
+            "Adjacency row count must match owner_indices: {} != {}.".format(
+                len(adjacency),
+                owners.size,
+            )
         )
 
     iterations = int(iterations)
@@ -276,13 +345,16 @@ def _validate_inputs(
             neighbour_id = int(neighbour_id)
             if neighbour_id < 0 or neighbour_id >= vertex_count:
                 raise ValueError(
-                    "Adjacency for vertex {} contains invalid neighbour {}."
-                    .format(vertex_id, neighbour_id)
+                    "Adjacency for vertex {} contains invalid neighbour {}.".format(
+                        vertex_id,
+                        neighbour_id,
+                    )
                 )
             if neighbour_id == vertex_id:
                 raise ValueError(
-                    "Adjacency must not contain self-edges. Vertex: {}."
-                    .format(vertex_id)
+                    "Adjacency must not contain self-edges. Vertex: {}.".format(
+                        vertex_id
+                    )
                 )
 
     if initial_weights is None:
@@ -313,8 +385,9 @@ def _validate_inputs(
         bad = np.where(np.abs(row_sums - 1.0) > 1e-8)[0]
         if bad.size:
             raise ValueError(
-                "initial_weights rows must total 1.0. First vertex IDs: {}"
-                .format(bad[:20].tolist())
+                "initial_weights rows must total 1.0. First vertex IDs: {}".format(
+                    bad[:20].tolist()
+                )
             )
 
     if mutable_vertex_ids is None:
@@ -346,32 +419,6 @@ def _build_one_hot_weights(owner_indices, influence_count):
     return weights
 
 
-def _build_edge_arrays(adjacency):
-    degrees = np.asarray(
-        [len(neighbours) for neighbours in adjacency],
-        dtype=np.int32,
-    )
-    edge_count = int(np.sum(degrees, dtype=np.int64))
-    if edge_count == 0:
-        empty = np.empty(0, dtype=np.int32)
-        return degrees, empty, empty.copy()
-
-    source_ids = np.repeat(
-        np.arange(len(adjacency), dtype=np.int32),
-        degrees,
-    )
-    neighbour_ids = np.concatenate(
-        [
-            np.asarray(neighbours, dtype=np.int32)
-            for neighbours in adjacency
-            if neighbours
-        ]
-    )
-    if source_ids.size != edge_count or neighbour_ids.size != edge_count:
-        raise RuntimeError("Failed to flatten mesh adjacency consistently.")
-    return degrees, source_ids, neighbour_ids
-
-
 def _normalize_rows(weights, tolerance):
     if not np.all(np.isfinite(weights)):
         raise RuntimeError("Bind diffusion produced non-finite weights.")
@@ -381,8 +428,9 @@ def _normalize_rows(weights, tolerance):
             np.any(weights < -tolerance, axis=1)
         )[0][:20]
         raise RuntimeError(
-            "Bind diffusion produced negative weights. First vertex IDs: {}"
-            .format(bad_rows.tolist())
+            "Bind diffusion produced negative weights. First vertex IDs: {}".format(
+                bad_rows.tolist()
+            )
         )
 
     weights = np.maximum(weights, 0.0)
@@ -390,8 +438,9 @@ def _normalize_rows(weights, tolerance):
     invalid_rows = np.where(row_sums <= tolerance)[0]
     if invalid_rows.size:
         raise RuntimeError(
-            "Bind diffusion produced empty weight rows. First vertex IDs: {}"
-            .format(invalid_rows[:20].tolist())
+            "Bind diffusion produced empty weight rows. First vertex IDs: {}".format(
+                invalid_rows[:20].tolist()
+            )
         )
     return weights / row_sums[:, np.newaxis]
 

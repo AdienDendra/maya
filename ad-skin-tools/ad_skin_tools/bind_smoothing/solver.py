@@ -1,11 +1,7 @@
-"""Smoothing pipeline for final Region ownership and fixed boundary weights.
-
-Region remains the blocking authority. Blend and Iterations control only topology
-weight diffusion. Bind Skin updates every row. Add Influence can restrict updates
-and final constraints to claimed rows while existing rows remain fixed context.
-"""
+"""Smoothing pipeline for immutable blocking ownership."""
 
 from dataclasses import dataclass
+import time
 from typing import Optional, Sequence
 
 import numpy as np
@@ -31,7 +27,7 @@ from ad_skin_tools.bind_smoothing.validation import (
 
 @dataclass(frozen=True)
 class BindSmoothingResult:
-    """Final weights and diagnostics derived from immutable blocking owners."""
+    """Final weights, diagnostics, and isolated smoothing-stage timings."""
 
     weights: np.ndarray
     blocking_owner_indices: np.ndarray
@@ -42,6 +38,13 @@ class BindSmoothingResult:
     projection_result: GeometricMaxInfluenceResult
     owner_maximum_result: OwnerMaximumResult
     validation_result: BindWeightValidationResult
+    input_validation_seconds: float
+    diffusion_seconds: float
+    maximum_influence_seconds: float
+    owner_maximum_seconds: float
+    validation_seconds: float
+    assembly_seconds: float
+    elapsed_seconds: float
 
     @property
     def vertex_count(self) -> int:
@@ -62,13 +65,10 @@ def solve_bind_smoothing(
     mutable_vertex_ids: Optional[Sequence[int]] = None,
     constrained_vertex_ids: Optional[Sequence[int]] = None,
 ) -> BindSmoothingResult:
-    """Smooth weights without recalculating Region ownership.
+    """Smooth weights without recalculating or modifying blocking ownership."""
 
-    ``initial_weights`` defaults to exact one-hot ownership. ``mutable_vertex_ids``
-    restricts diffusion updates. ``constrained_vertex_ids`` restricts Max
-    Influences, owner maximality, and final validation to rows that will be written.
-    """
-
+    started = time.perf_counter()
+    input_started = time.perf_counter()
     options = (options or BindSmoothingOptions()).validated()
     owners, vertices, influences = _validate_final_blocking_input(
         owner_indices=owner_indices,
@@ -84,7 +84,9 @@ def solve_bind_smoothing(
         default_all=True,
         label="constrained_vertex_ids",
     )
+    input_validation_seconds = time.perf_counter() - input_started
 
+    diffusion_started = time.perf_counter()
     diffusion_result = diffuse_hard_ownership(
         owner_indices=owners,
         adjacency=adjacency,
@@ -94,6 +96,7 @@ def solve_bind_smoothing(
         initial_weights=initial_weights,
         mutable_vertex_ids=mutable_vertex_ids,
     )
+    diffusion_seconds = time.perf_counter() - diffusion_started
 
     constrained_weights = np.asarray(
         diffusion_result.weights[constrained_ids],
@@ -102,6 +105,7 @@ def solve_bind_smoothing(
     constrained_owners = owners[constrained_ids]
     constrained_positions = vertices[constrained_ids]
 
+    projection_started = time.perf_counter()
     projection_result = enforce_maximum_influences_by_geometry(
         weights=constrained_weights,
         owner_indices=constrained_owners,
@@ -110,6 +114,7 @@ def solve_bind_smoothing(
         maximum_influences=effective_maximum,
         weight_epsilon=options.weight_epsilon,
     )
+    maximum_influence_seconds = time.perf_counter() - projection_started
     if projection_result.unresolved_coincident_vertex_ids:
         bad = constrained_ids[
             np.asarray(
@@ -123,10 +128,12 @@ def solve_bind_smoothing(
             "identical. First vertex IDs: {}".format(bad.tolist())
         )
 
+    owner_started = time.perf_counter()
     owner_maximum_result = project_region_owner_to_maximum(
         weights=projection_result.weights,
         owner_indices=constrained_owners,
     )
+    owner_maximum_seconds = time.perf_counter() - owner_started
     if owner_maximum_result.owner_below_maximum_after:
         bad = constrained_ids[
             np.asarray(
@@ -139,6 +146,7 @@ def solve_bind_smoothing(
             "preservation. First vertex IDs: {}".format(bad.tolist())
         )
 
+    validation_started = time.perf_counter()
     validation_result = validate_bind_weights(
         weights=owner_maximum_result.weights,
         owner_indices=constrained_owners,
@@ -146,12 +154,15 @@ def solve_bind_smoothing(
         weight_epsilon=options.weight_epsilon,
         require_exact_one_hot=options.iterations == 0,
     )
+    validation_seconds = time.perf_counter() - validation_started
 
+    assembly_started = time.perf_counter()
     final_weights = np.asarray(
         diffusion_result.weights,
         dtype=np.float64,
     ).copy()
     final_weights[constrained_ids] = owner_maximum_result.weights
+    assembly_seconds = time.perf_counter() - assembly_started
 
     return BindSmoothingResult(
         weights=final_weights,
@@ -163,6 +174,13 @@ def solve_bind_smoothing(
         projection_result=projection_result,
         owner_maximum_result=owner_maximum_result,
         validation_result=validation_result,
+        input_validation_seconds=float(input_validation_seconds),
+        diffusion_seconds=float(diffusion_seconds),
+        maximum_influence_seconds=float(maximum_influence_seconds),
+        owner_maximum_seconds=float(owner_maximum_seconds),
+        validation_seconds=float(validation_seconds),
+        assembly_seconds=float(assembly_seconds),
+        elapsed_seconds=float(time.perf_counter() - started),
     )
 
 

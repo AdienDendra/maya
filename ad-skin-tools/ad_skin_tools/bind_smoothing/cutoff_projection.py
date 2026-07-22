@@ -1,10 +1,4 @@
-"""Geometry-complete Max Influences projection for smoothed bind weights.
-
-The final Region owner always occupies one influence slot. Other active
-influences are ranked by weight, vertex-to-joint distance, then a stable
-world-position key. This completes symmetric cutoff ties without using joint
-names, hierarchy, UI selection order, or influence column order.
-"""
+"""Fast deterministic Max Influences projection for smoothed bind weights."""
 
 from dataclasses import dataclass
 from typing import Tuple
@@ -14,7 +8,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class GeometricMaxInfluenceResult:
-    """Constrained weights plus diagnostics for every cutoff decision."""
+    """Constrained weights plus diagnostics for cutoff decisions."""
 
     weights: np.ndarray
     pruned_vertex_ids: Tuple[int, ...]
@@ -34,8 +28,6 @@ class GeometricMaxInfluenceResult:
 
     @property
     def unresolved_exact_tie_vertex_ids(self) -> Tuple[int, ...]:
-        """Compatibility alias for unresolved coincident cutoff rows."""
-
         return self.unresolved_coincident_vertex_ids
 
 
@@ -47,19 +39,11 @@ def enforce_maximum_influences_by_geometry(
     maximum_influences: int,
     weight_epsilon: float,
 ) -> GeometricMaxInfluenceResult:
-    """Keep at most ``maximum_influences`` active weights per vertex.
+    """Keep the owner plus the strongest geometrically resolved candidates.
 
-    One slot is permanently reserved for the final blocking owner. Remaining
-    candidates are ordered by:
-
-    1. larger smoothed weight;
-    2. smaller squared vertex-to-joint distance;
-    3. lexicographically smaller joint world position.
-
-    The third key is a spatial-canonical fallback independent from influence
-    list order. A row remains unresolved only when the cutoff would split
-    candidates whose weight, distance, and world position are all exactly
-    identical. Those joints are geometrically indistinguishable at this stage.
+    The blocking owner permanently occupies one slot. Remaining influences are
+    ranked by larger weight. Exact cutoff-weight ties are resolved only when
+    required, using smaller vertex distance and then joint world position.
     """
 
     matrix, owners = _validated_weight_inputs(weights, owner_indices)
@@ -91,114 +75,116 @@ def enforce_maximum_influences_by_geometry(
     near_zero[rows, owners] = False
     projected[near_zero] = 0.0
 
+    active_counts = np.count_nonzero(
+        projected > weight_epsilon,
+        axis=1,
+    ).astype(np.int32)
+    owner_missing = projected[rows, owners] <= weight_epsilon
+    effective_active_counts = active_counts + owner_missing.astype(np.int32)
+    rows_to_prune = np.where(
+        effective_active_counts > maximum_influences
+    )[0].astype(np.int32)
+
     pruned = []
     cutoff_ties = []
     distance_resolved = []
     spatial_resolved = []
     unresolved_coincident = []
     discarded_entry_count = 0
+    slot_count = maximum_influences - 1
 
-    for vertex_id in range(projected.shape[0]):
-        row = projected[vertex_id]
-        owner_column = int(owners[vertex_id])
-        active_columns = [
-            int(column)
-            for column in np.where(row > weight_epsilon)[0].tolist()
-        ]
-        if owner_column not in active_columns:
-            active_columns.append(owner_column)
-        if len(active_columns) <= maximum_influences:
-            continue
+    for vertex_id in rows_to_prune.tolist():
+        row = projected[int(vertex_id)]
+        owner_column = int(owners[int(vertex_id)])
+        active_columns = np.flatnonzero(row > weight_epsilon).astype(np.int32)
+        candidate_columns = active_columns[active_columns != owner_column]
 
-        candidate_columns = [
-            column for column in active_columns if column != owner_column
-        ]
-        slot_count = maximum_influences - 1
-        delta = influences - vertices[vertex_id][np.newaxis, :]
-        squared_distances = np.einsum("ji,ji->j", delta, delta)
-        candidate_columns.sort(
-            key=lambda column: _geometric_rank_key(
-                column=column,
-                row=row,
-                squared_distances=squared_distances,
-                influence_positions=influences,
+        if slot_count <= 0:
+            selected_candidates = np.empty(0, dtype=np.int32)
+        else:
+            candidate_weights = row[candidate_columns]
+            cutoff_weight = -float(
+                np.partition(
+                    -candidate_weights,
+                    slot_count - 1,
+                )[slot_count - 1]
             )
-        )
+            strict_columns = candidate_columns[candidate_weights > cutoff_weight]
+            tied_columns = candidate_columns[candidate_weights == cutoff_weight]
+            remaining_slots = slot_count - int(strict_columns.size)
 
-        if slot_count > 0 and len(candidate_columns) > slot_count:
-            selected_boundary = int(candidate_columns[slot_count - 1])
-            excluded_boundary = int(candidate_columns[slot_count])
-            selected_weight = float(row[selected_boundary])
-            excluded_weight = float(row[excluded_boundary])
-
-            if selected_weight == excluded_weight:
-                cutoff_ties.append(vertex_id)
-                selected_distance = float(squared_distances[selected_boundary])
-                excluded_distance = float(squared_distances[excluded_boundary])
-
-                if selected_distance != excluded_distance:
-                    distance_resolved.append(vertex_id)
-                else:
-                    selected_position = _position_key(
-                        influences[selected_boundary]
+            if tied_columns.size > remaining_slots:
+                cutoff_ties.append(int(vertex_id))
+                delta = (
+                    influences[tied_columns]
+                    - vertices[int(vertex_id)][np.newaxis, :]
+                )
+                squared_distances = np.einsum("ji,ji->j", delta, delta)
+                tie_order = np.lexsort(
+                    (
+                        influences[tied_columns, 2],
+                        influences[tied_columns, 1],
+                        influences[tied_columns, 0],
+                        squared_distances,
                     )
-                    excluded_position = _position_key(
-                        influences[excluded_boundary]
+                )
+                ordered_ties = tied_columns[tie_order]
+
+                selected_boundary = int(ordered_ties[remaining_slots - 1])
+                excluded_boundary = int(ordered_ties[remaining_slots])
+                selected_distance = float(
+                    squared_distances[tie_order[remaining_slots - 1]]
+                )
+                excluded_distance = float(
+                    squared_distances[tie_order[remaining_slots]]
+                )
+                if selected_distance != excluded_distance:
+                    distance_resolved.append(int(vertex_id))
+                else:
+                    selected_position = tuple(
+                        float(value) for value in influences[selected_boundary]
+                    )
+                    excluded_position = tuple(
+                        float(value) for value in influences[excluded_boundary]
                     )
                     if selected_position == excluded_position:
-                        unresolved_coincident.append(vertex_id)
+                        unresolved_coincident.append(int(vertex_id))
                         continue
-                    spatial_resolved.append(vertex_id)
+                    spatial_resolved.append(int(vertex_id))
 
-        selected = {owner_column}
-        selected.update(candidate_columns[:slot_count])
-        discarded_columns = [
-            column for column in active_columns if column not in selected
-        ]
-        if discarded_columns:
-            row[np.asarray(discarded_columns, dtype=np.int32)] = 0.0
-            discarded_entry_count += len(discarded_columns)
-            pruned.append(vertex_id)
+                selected_ties = ordered_ties[:remaining_slots]
+            else:
+                selected_ties = tied_columns
+
+            selected_candidates = np.concatenate(
+                (strict_columns, selected_ties)
+            ).astype(np.int32, copy=False)
+
+        selected_columns = np.concatenate(
+            (
+                np.asarray([owner_column], dtype=np.int32),
+                selected_candidates,
+            )
+        )
+        selected_values = row[selected_columns].copy()
+        discarded_entry_count += int(
+            effective_active_counts[int(vertex_id)] - selected_columns.size
+        )
+        row.fill(0.0)
+        row[selected_columns] = selected_values
+        pruned.append(int(vertex_id))
 
     projected = _normalize_rows(projected)
 
     return GeometricMaxInfluenceResult(
         weights=projected,
-        pruned_vertex_ids=tuple(int(value) for value in pruned),
-        cutoff_weight_tie_vertex_ids=tuple(
-            int(value) for value in cutoff_ties
-        ),
-        distance_resolved_vertex_ids=tuple(
-            int(value) for value in distance_resolved
-        ),
-        spatial_canonical_resolved_vertex_ids=tuple(
-            int(value) for value in spatial_resolved
-        ),
-        unresolved_coincident_vertex_ids=tuple(
-            int(value) for value in unresolved_coincident
-        ),
+        pruned_vertex_ids=tuple(pruned),
+        cutoff_weight_tie_vertex_ids=tuple(cutoff_ties),
+        distance_resolved_vertex_ids=tuple(distance_resolved),
+        spatial_canonical_resolved_vertex_ids=tuple(spatial_resolved),
+        unresolved_coincident_vertex_ids=tuple(unresolved_coincident),
         discarded_entry_count=int(discarded_entry_count),
     )
-
-
-def _geometric_rank_key(
-    column,
-    row,
-    squared_distances,
-    influence_positions,
-):
-    position = _position_key(influence_positions[int(column)])
-    return (
-        -float(row[int(column)]),
-        float(squared_distances[int(column)]),
-        position[0],
-        position[1],
-        position[2],
-    )
-
-
-def _position_key(position):
-    return tuple(float(value) for value in np.asarray(position).tolist())
 
 
 def _validated_weight_inputs(weights, owner_indices):
