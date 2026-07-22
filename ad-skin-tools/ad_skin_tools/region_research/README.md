@@ -9,7 +9,7 @@ selection order, and joint names do not participate in the Region mathematics.
 
 ## Stage 01: complete hard ownership before connectivity
 
-Stage 01 now runs in this order:
+Stage 01 runs in this order:
 
 1. capture mesh vertices and joint pivots in world space;
 2. build direct vertex adjacency once;
@@ -50,10 +50,10 @@ Stage 02 does not move vertices. Its main result is the set of topology-valid
 candidate owners. Contact-edge counts remain diagnostic evidence, not a final
 ownership decision.
 
-## Stage 03: conservative single-candidate proposals
+## Stage 03: single-candidate proposals
 
 Stage 03 creates a copied proposal owner map. A whole secondary region is changed
-only when exactly one assigned candidate owner touches its boundary.
+when exactly one assigned candidate owner touches its boundary.
 
 Regions with multiple candidates or no assigned candidate remain deferred.
 Stage 03 does not create or edit a skinCluster and does not modify Stage 01 or
@@ -61,6 +61,31 @@ Stage 02 data.
 
 Stage 03 treats any unassigned boundary as an invariant failure because exact ties
 must already be resolved before connected regions are built.
+
+## Stage 04: multiple-candidate proposals
+
+Stage 04 starts from the Stage 03 proposal owner map and resolves only secondary
+regions that touch more than one topology-valid candidate owner.
+
+Every candidate is scored against the complete connected region:
+
+```text
+aggregate squared distance =
+sum of squared distances from every region vertex to the candidate joint
+```
+
+The decision order is deterministic and contains no tuned threshold:
+
+1. unique minimum aggregate squared distance;
+2. unique largest boundary contact-edge count, only after an exact distance tie;
+3. candidate with fewer frozen Stage 01 owned vertices;
+4. stable joint world-position key, then Maya UUID.
+
+The whole region is reassigned as one unit. Stage 04 never splits vertices inside
+one connected secondary region between different targets.
+
+A region with no external topology candidate remains unresolved for a later
+topology-isolated-shell rule. Stage 04 still does not write Maya skin weights.
 
 ## Maya usage
 
@@ -71,25 +96,28 @@ import importlib
 import ad_skin_tools.region_research.runner as rr
 import ad_skin_tools.region_research.visual as rv
 import ad_skin_tools.region_research.exact_tie_visual as rtv
+import ad_skin_tools.region_research.multiple_candidate_visual as rmv
 
 importlib.reload(rr)
 importlib.reload(rv)
 importlib.reload(rtv)
+importlib.reload(rmv)
 
 mesh = "body_geo"
 joints = cmds.ls(selection=True, long=True, type="joint") or []
 
-stage_03 = rr.run_stage_03(mesh, joints)
+stage_04 = rr.run_stage_04(mesh, joints)
+stage_03 = stage_04.stage_03
 stage_02 = stage_03.stage_02
 stage_01 = stage_02.stage_01
 ```
 
 The selected joints may be independent or come from unrelated hierarchies.
 
-Continue from an existing Stage 02 result without repeating earlier work:
+Continue from an existing Stage 03 result without repeating earlier work:
 
 ```python
-stage_03 = rr.run_stage_03_from_stage_02(stage_02)
+stage_04 = rr.run_stage_04_from_stage_03(stage_03)
 ```
 
 Results are also stored in `builtins`:
@@ -100,6 +128,7 @@ import builtins
 stage_01 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_01
 stage_02 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_02
 stage_03 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_03
+stage_04 = builtins.AD_SKIN_REGION_RESEARCH_STAGE_04
 ```
 
 ## Exact-tie visual selection
@@ -145,14 +174,23 @@ rv.select_stage_03_recipient(stage_03, "jointB")
 rv.select_stage_03_deferred_region(stage_03, "jointC", 0)
 ```
 
+Stage 04:
+
+```python
+rmv.select_changed_vertices(stage_04)
+rmv.select_proposal(stage_04, "jointB", 1)
+rmv.select_recipient(stage_04, "jointA")
+rmv.select_unresolved_region(stage_04, "jointC", 0)
+```
+
 Selection helpers only select Maya vertices. They do not change weights.
 
 ## Current stopping point
 
 The research pipeline currently stops before:
 
-- resolving multiple boundary candidates;
 - resolving topology-isolated shells;
+- recomputing connectivity from the complete Stage 04 proposal owner map;
 - iterating proposals until stable;
 - creating hard skin weights;
 - smoothing.
