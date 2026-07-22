@@ -6,6 +6,13 @@ from ad_skin_tools.region_research.boundary_contacts import (
     SecondaryRegionBoundary,
     analyze_secondary_region_boundaries,
 )
+from ad_skin_tools.region_research.exact_tie_resolution import (
+    ExactTieResolutionResult,
+    RESOLVED_BY_FEWER_OWNED_VERTICES,
+    RESOLVED_BY_STABLE_JOINT_KEY,
+    RESOLVED_BY_TOPOLOGY,
+    resolve_exact_ties,
+)
 from ad_skin_tools.region_research.nearest_regions import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
     NearestRegionResearchResult,
@@ -38,7 +45,11 @@ __all__ = [
     "BoundaryOwnerContact",
     "DEFAULT_DISTANCE_CHUNK_SIZE",
     "DeferredSecondaryRegion",
+    "ExactTieResolutionResult",
     "NearestRegionResearchResult",
+    "RESOLVED_BY_FEWER_OWNED_VERTICES",
+    "RESOLVED_BY_STABLE_JOINT_KEY",
+    "RESOLVED_BY_TOPOLOGY",
     "SecondaryRegionBoundary",
     "SingleCandidateProposal",
     "SingleCandidateReassignmentResult",
@@ -51,6 +62,7 @@ __all__ = [
     "print_stage_02_report",
     "print_stage_03_report",
     "propose_single_candidate_reassignments",
+    "resolve_exact_ties",
     "run_stage_01",
     "run_stage_02",
     "run_stage_02_from_stage_01",
