@@ -19,6 +19,7 @@ class ResearchMeshContext:
     mesh_shape: str
     mesh_transform: str
     influences: Tuple[str, ...]
+    influence_uuids: Tuple[str, ...]
     vertex_positions: np.ndarray
     influence_positions: np.ndarray
     adjacency: Tuple[Tuple[int, ...], ...]
@@ -61,6 +62,7 @@ def build_research_mesh_context(
         vertex_positions[index] = (point.x, point.y, point.z)
 
     influence_positions = np.empty((len(influences), 3), dtype=np.float64)
+    influence_uuids = []
     for index, joint in enumerate(influences):
         value = cmds.xform(
             joint,
@@ -69,6 +71,14 @@ def build_research_mesh_context(
             translation=True,
         )
         influence_positions[index] = value
+
+        uuid_matches = cmds.ls(joint, uuid=True) or []
+        if len(uuid_matches) != 1:
+            raise RuntimeError(
+                "Unable to resolve one stable Maya UUID for joint:\n{}".format(joint)
+            )
+        influence_uuids.append(str(uuid_matches[0]))
+
     scene_capture_seconds = time.perf_counter() - capture_started
 
     adjacency_started = time.perf_counter()
@@ -91,6 +101,7 @@ def build_research_mesh_context(
         mesh_shape=mesh_shape,
         mesh_transform=mesh_transform,
         influences=influences,
+        influence_uuids=tuple(influence_uuids),
         vertex_positions=vertex_positions,
         influence_positions=influence_positions,
         adjacency=adjacency,
