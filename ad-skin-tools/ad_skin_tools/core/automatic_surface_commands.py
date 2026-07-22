@@ -9,6 +9,7 @@ from ad_skin_tools.core.smoothed_automatic_bind import (
     bind_object_automatic_surface as _bind_object_automatic_surface,
     print_automatic_surface_report,
 )
+from ad_skin_tools.development import automatic_bind_validation
 
 
 def bind_object_automatic_surface(
@@ -29,4 +30,8 @@ def bind_object_automatic_surface(
 
 
 def print_report(result: AutomaticSurfaceBindResult) -> None:
+    """Print production timing, then run removable development validation."""
+
     print_automatic_surface_report(result)
+    validation = automatic_bind_validation.validate_and_print(result)
+    builtins.AD_SKIN_BIND_VALIDATION_RESULT = validation
