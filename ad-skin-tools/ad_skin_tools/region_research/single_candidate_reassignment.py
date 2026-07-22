@@ -1,8 +1,10 @@
-"""Stage 03: conservative single-candidate reassignment proposals.
+"""Stage 03: conservative single-contact reassignment proposals.
 
-This stage never edits a skinCluster or the stage-one result. It copies the hard
-owner map and changes a whole secondary region only when Stage 02 found exactly
-one assigned boundary-contact owner.
+A secondary region is only a disconnected component of one owner. It is not proof
+that the ownership is wrong. This stage copies the complete Stage 01 owner map and
+changes a whole secondary region only when exactly one external owner touches its
+boundary. Regions touching multiple owners, or no external owner, keep their
+original source ownership.
 """
 
 from dataclasses import dataclass
@@ -16,8 +18,13 @@ from ad_skin_tools.region_research.boundary_contacts import (
 )
 
 
-DEFERRED_NO_ASSIGNED_CONTACT = "no_assigned_boundary_contact"
-DEFERRED_MULTIPLE_ASSIGNED_CONTACTS = "multiple_assigned_boundary_contacts"
+PRESERVED_NO_EXTERNAL_CONTACT = "preserve_no_external_topology_contact"
+PRESERVED_MULTIPLE_CONTACT_OWNERS = "preserve_multiple_boundary_contact_owners"
+
+# Backward-compatible names for existing research scripts. These regions are no
+# longer considered unresolved; their source ownership is intentionally preserved.
+DEFERRED_NO_ASSIGNED_CONTACT = PRESERVED_NO_EXTERNAL_CONTACT
+DEFERRED_MULTIPLE_ASSIGNED_CONTACTS = PRESERVED_MULTIPLE_CONTACT_OWNERS
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,7 @@ class SingleCandidateProposal:
 
 
 @dataclass(frozen=True)
-class DeferredSecondaryRegion:
+class PreservedSecondaryRegion:
     source_influence_index: int
     source_joint: str
     source_region_index: int
@@ -51,12 +58,16 @@ class DeferredSecondaryRegion:
         return len(self.vertex_ids)
 
 
+# Keep the old type name available while the research API is being iterated.
+DeferredSecondaryRegion = PreservedSecondaryRegion
+
+
 @dataclass(frozen=True)
 class SingleCandidateReassignmentResult:
     stage_02: BoundaryContactResearchResult
     proposed_owner_indices: np.ndarray
     proposals: Tuple[SingleCandidateProposal, ...]
-    deferred_regions: Tuple[DeferredSecondaryRegion, ...]
+    deferred_regions: Tuple[PreservedSecondaryRegion, ...]
     changed_vertex_ids: Tuple[int, ...]
     elapsed_seconds: float
 
@@ -65,8 +76,18 @@ class SingleCandidateReassignmentResult:
         return len(self.proposals)
 
     @property
-    def deferred_region_count(self) -> int:
+    def preserved_regions(self) -> Tuple[PreservedSecondaryRegion, ...]:
+        return self.deferred_regions
+
+    @property
+    def preserved_region_count(self) -> int:
         return len(self.deferred_regions)
+
+    @property
+    def deferred_region_count(self) -> int:
+        """Backward-compatible alias for preserved_region_count."""
+
+        return self.preserved_region_count
 
     @property
     def changed_vertex_count(self) -> int:
@@ -91,7 +112,7 @@ def propose_single_candidate_reassignments(
         )
 
     proposals = []
-    deferred = []
+    preserved = []
 
     for region in stage_02.secondary_regions:
         contacts = region.owner_contacts
@@ -103,19 +124,19 @@ def propose_single_candidate_reassignments(
             )
 
         if not contacts:
-            deferred.append(
-                _deferred_region(
+            preserved.append(
+                _preserved_region(
                     region=region,
-                    reason=DEFERRED_NO_ASSIGNED_CONTACT,
+                    reason=PRESERVED_NO_EXTERNAL_CONTACT,
                 )
             )
             continue
 
         if len(contacts) != 1:
-            deferred.append(
-                _deferred_region(
+            preserved.append(
+                _preserved_region(
                     region=region,
-                    reason=DEFERRED_MULTIPLE_ASSIGNED_CONTACTS,
+                    reason=PRESERVED_MULTIPLE_CONTACT_OWNERS,
                 )
             )
             continue
@@ -145,14 +166,14 @@ def propose_single_candidate_reassignments(
         stage_02=stage_02,
         proposed_owner_indices=owners,
         proposals=tuple(proposals),
-        deferred_regions=tuple(deferred),
+        deferred_regions=tuple(preserved),
         changed_vertex_ids=changed_vertex_ids,
         elapsed_seconds=float(time.perf_counter() - started),
     )
 
 
-def _deferred_region(region, reason: str) -> DeferredSecondaryRegion:
-    return DeferredSecondaryRegion(
+def _preserved_region(region, reason: str) -> PreservedSecondaryRegion:
+    return PreservedSecondaryRegion(
         source_influence_index=int(region.influence_index),
         source_joint=region.joint,
         source_region_index=int(region.region_index),
