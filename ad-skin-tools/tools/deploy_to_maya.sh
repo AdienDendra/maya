@@ -89,6 +89,8 @@ SCRIPT_DST_DIR="$WINDOWS_DOCUMENTS/maya/$MAYA_VERSION/scripts"
 PACKAGE_DST="$SCRIPT_DST_DIR/ad_skin_tools"
 DIAGNOSTIC_SRC="$REPO/scripts/test_add_influence.py"
 DIAGNOSTIC_DST="$SCRIPT_DST_DIR/test_add_influence.py"
+V110_SMOKE_SRC="$REPO/scripts/smoke_test_v110_add_influence.py"
+V110_SMOKE_DST="$SCRIPT_DST_DIR/smoke_test_v110_add_influence.py"
 SOURCE_VALIDATOR="$REPO/tools/validate_source.py"
 
 CURRENT_BRANCH="$(git -C "$REPO" branch --show-current 2>/dev/null || true)"
@@ -117,6 +119,7 @@ required_files=(
     "$PACKAGE_SRC/core/undoable_skin_weights.py"
     "$PACKAGE_SRC/core/automatic_surface_commands.py"
     "$PACKAGE_SRC/core/add_influence.py"
+    "$PACKAGE_SRC/core/add_influence_v11.py"
     "$PACKAGE_SRC/core/component_selection.py"
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
@@ -138,6 +141,11 @@ done
 
 if [ ! -f "$DIAGNOSTIC_SRC" ]; then
     echo "ERROR: diagnostic runner is missing: $DIAGNOSTIC_SRC"
+    exit 1
+fi
+
+if [ ! -f "$V110_SMOKE_SRC" ]; then
+    echo "ERROR: v11 smoke runner is missing: $V110_SMOKE_SRC"
     exit 1
 fi
 
@@ -182,6 +190,7 @@ rm -f \
     "$SCRIPT_DST_DIR/test_region_ambiguous_loop_distance_tiebreak_bind.py"
 
 cp "$DIAGNOSTIC_SRC" "$DIAGNOSTIC_DST"
+cp "$V110_SMOKE_SRC" "$V110_SMOKE_DST"
 
 echo
 echo "Other ad_skin_tools copies under the Maya Documents directory:"
@@ -194,4 +203,5 @@ find "$WINDOWS_DOCUMENTS/maya" \
 echo
 echo "Active AD Skin Tools package deployment verified."
 echo "Diagnostic runner: $DIAGNOSTIC_DST"
+echo "v11 smoke runner:  $V110_SMOKE_DST"
 echo "Done."
