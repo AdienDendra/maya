@@ -7,7 +7,7 @@ from typing import Dict, Tuple
 import maya.api.OpenMaya as om
 import numpy as np
 
-from ad_skin_tools.region_research.closest_region_ownership import (
+from ad_skin_tools.region.closest_region_ownership import (
     ClosestRegionOwnershipResult,
 )
 
