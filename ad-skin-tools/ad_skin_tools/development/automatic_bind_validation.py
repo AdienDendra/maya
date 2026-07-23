@@ -31,7 +31,7 @@ class AutomaticBindDevelopmentValidationResult:
 def validate_and_print(
     result: AutomaticSurfaceBindResult,
 ) -> AutomaticBindDevelopmentValidationResult:
-    """Read Maya weights back, validate them, and print development diagnostics."""
+    """Read Maya weights back, validate them, and print diagnostics."""
 
     started = time.perf_counter()
     adapter = SkinClusterAdapter.from_mesh(result.mesh_shape)
@@ -89,7 +89,7 @@ def print_development_report(
     result: AutomaticSurfaceBindResult,
     validation: AutomaticBindDevelopmentValidationResult,
 ) -> None:
-    """Print detailed diagnostics without changing the production timing total."""
+    """Print diagnostics without changing the production timing total."""
 
     pipeline = result.ownership_pipeline
     closest = pipeline.closest_ownership
@@ -130,7 +130,10 @@ def print_development_report(
         "Stored maximum weight difference:",
         validation.stored_maximum_weight_difference,
     )
-    print("Owner below maximum after:", validation.owner_below_maximum_count)
+    print(
+        "Blocking owner below final maximum:",
+        validation.owner_below_maximum_count,
+    )
     print(
         "Final active influence histogram:",
         validation.active_influence_histogram,
@@ -229,6 +232,7 @@ def _expected_weights_in_skin_order(adapter, result):
                 "\n".join(missing) if missing else "<count mismatch>"
             )
         )
+
     permutation = np.asarray(
         [ownership_column_by_joint[joint] for joint in skin_influences],
         dtype=np.int32,
@@ -250,13 +254,11 @@ def _validate_stored_weights(
             )
         )
 
-    maximum_difference = float(np.max(np.abs(actual - expected)))
+    difference = np.abs(actual - expected)
+    maximum_difference = float(np.max(difference))
     if maximum_difference > STORED_WEIGHT_TOLERANCE:
         bad = np.where(
-            np.any(
-                np.abs(actual - expected) > STORED_WEIGHT_TOLERANCE,
-                axis=1,
-            )
+            np.any(difference > STORED_WEIGHT_TOLERANCE, axis=1)
         )[0][:20]
         raise RuntimeError(
             "Maya stored weights differ from the calculated matrix. Maximum "
@@ -266,8 +268,7 @@ def _validate_stored_weights(
             )
         )
 
-    row_sums = np.sum(actual, axis=1, dtype=np.float64)
-    row_errors = np.abs(row_sums - 1.0)
+    row_errors = np.abs(np.sum(actual, axis=1, dtype=np.float64) - 1.0)
     maximum_row_sum_error = (
         float(np.max(row_errors)) if row_errors.size else 0.0
     )
@@ -280,25 +281,20 @@ def _validate_stored_weights(
         )
 
     active_counts = np.count_nonzero(actual > 1e-12, axis=1).astype(np.int32)
-    if np.any(active_counts > int(result.effective_maximum_influences)):
-        bad = np.where(
-            active_counts > int(result.effective_maximum_influences)
-        )[0][:20]
+    excessive = np.where(
+        active_counts > int(result.effective_maximum_influences)
+    )[0]
+    if excessive.size:
         raise RuntimeError(
             "Stored weights exceed Max Influences. First vertex IDs: {}".format(
-                bad.tolist()
+                excessive[:20].tolist()
             )
         )
-    histogram_values, histogram_counts = np.unique(
-        active_counts,
-        return_counts=True,
-    )
+
+    values, counts = np.unique(active_counts, return_counts=True)
     active_histogram = tuple(
-        (int(active_count), int(vertex_count))
-        for active_count, vertex_count in zip(
-            histogram_values.tolist(),
-            histogram_counts.tolist(),
-        )
+        (int(value), int(count))
+        for value, count in zip(values.tolist(), counts.tolist())
     )
 
     skin_column_by_joint = {
@@ -317,14 +313,6 @@ def _validate_stored_weights(
             owner_weights + STORED_WEIGHT_TOLERANCE < row_maximums
         )
     )
-    if owner_below_maximum_count:
-        bad = np.where(
-            owner_weights + STORED_WEIGHT_TOLERANCE < row_maximums
-        )[0][:20]
-        raise RuntimeError(
-            "Blocking owner remains below another stored influence. First vertex "
-            "IDs: {}".format(bad.tolist())
-        )
 
     return (
         maximum_difference,

@@ -26,12 +26,8 @@ def print_timing(result) -> None:
         round(diffusion.finalization_seconds, 6),
     )
     print(
-        "Max Influences projection:",
+        "Neutral Max Influences projection:",
         round(smoothing.maximum_influence_seconds, 6),
-    )
-    print(
-        "Blocking-owner maximum:",
-        round(smoothing.owner_maximum_seconds, 6),
     )
     print("Final validation:", round(smoothing.validation_seconds, 6))
     print("Final assembly:", round(smoothing.assembly_seconds, 6))

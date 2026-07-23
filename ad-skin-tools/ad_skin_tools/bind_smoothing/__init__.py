@@ -8,10 +8,6 @@ from ad_skin_tools.bind_smoothing.diffusion import (
     BindDiffusionResult,
     diffuse_hard_ownership,
 )
-from ad_skin_tools.bind_smoothing.final_constraints import (
-    OwnerMaximumResult,
-    project_region_owner_to_maximum,
-)
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
 from ad_skin_tools.bind_smoothing.solver import (
     BindSmoothingResult,
@@ -28,10 +24,8 @@ __all__ = [
     "BindSmoothingResult",
     "BindWeightValidationResult",
     "GeometricMaxInfluenceResult",
-    "OwnerMaximumResult",
     "diffuse_hard_ownership",
     "enforce_maximum_influences_by_geometry",
-    "project_region_owner_to_maximum",
     "solve_bind_smoothing",
     "validate_bind_weights",
 ]

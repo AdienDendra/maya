@@ -26,7 +26,11 @@ def validate_bind_weights(
     weight_epsilon: float,
     require_exact_one_hot: bool = False,
 ) -> BindWeightValidationResult:
-    """Validate normalization, limits, and final blocking-owner presence."""
+    """Validate normalization and Max Influences.
+
+    ``owner_indices`` is retained only for diagnostics and the iteration-zero
+    one-hot check. Positive smoothing is free to change the dominant influence.
+    """
 
     matrix = np.asarray(weights, dtype=np.float64)
     owners = np.asarray(owner_indices, dtype=np.int32)
@@ -91,13 +95,6 @@ def validate_bind_weights(
 
     rows = np.arange(matrix.shape[0], dtype=np.int32)
     owner_values = matrix[rows, owners]
-    missing_owners = np.where(owner_values <= weight_epsilon)[0]
-    if missing_owners.size:
-        raise RuntimeError(
-            "Final bind weights removed the blocking Region owner. "
-            "First vertex IDs: {}".format(missing_owners[:20].tolist())
-        )
-
     dominant_owner_changed = np.where(
         np.argmax(matrix, axis=1).astype(np.int32) != owners
     )[0].astype(np.int32)

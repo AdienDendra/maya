@@ -1,4 +1,4 @@
-"""Fast deterministic Max Influences projection for smoothed bind weights."""
+"""Neutral deterministic Max Influences projection for smoothed weights."""
 
 from dataclasses import dataclass
 from typing import Tuple
@@ -33,20 +33,18 @@ class GeometricMaxInfluenceResult:
 
 def enforce_maximum_influences_by_geometry(
     weights: np.ndarray,
-    owner_indices: np.ndarray,
     vertex_positions: np.ndarray,
     influence_positions: np.ndarray,
     maximum_influences: int,
     weight_epsilon: float,
 ) -> GeometricMaxInfluenceResult:
-    """Keep the owner plus the strongest geometrically resolved candidates.
+    """Keep the strongest influences without reserving an ownership slot.
 
-    The blocking owner permanently occupies one slot. Remaining influences are
-    ranked by larger weight. Exact cutoff-weight ties are resolved only when
-    required, using smaller vertex distance and then joint world position.
+    Active influences are ranked by larger weight. Exact cutoff-weight ties are
+    resolved by smaller vertex distance, then joint world position.
     """
 
-    matrix, owners = _validated_weight_inputs(weights, owner_indices)
+    matrix = _validated_weights(weights)
     vertices = np.asarray(vertex_positions, dtype=np.float64)
     influences = np.asarray(influence_positions, dtype=np.float64)
     maximum_influences = int(maximum_influences)
@@ -70,19 +68,14 @@ def enforce_maximum_influences_by_geometry(
         raise ValueError("weight_epsilon cannot be negative.")
 
     projected = matrix.copy()
-    rows = np.arange(projected.shape[0], dtype=np.int32)
-    near_zero = projected <= weight_epsilon
-    near_zero[rows, owners] = False
-    projected[near_zero] = 0.0
+    projected[projected <= weight_epsilon] = 0.0
 
     active_counts = np.count_nonzero(
         projected > weight_epsilon,
         axis=1,
     ).astype(np.int32)
-    owner_missing = projected[rows, owners] <= weight_epsilon
-    effective_active_counts = active_counts + owner_missing.astype(np.int32)
     rows_to_prune = np.where(
-        effective_active_counts > maximum_influences
+        active_counts > maximum_influences
     )[0].astype(np.int32)
 
     pruned = []
@@ -91,84 +84,78 @@ def enforce_maximum_influences_by_geometry(
     spatial_resolved = []
     unresolved_coincident = []
     discarded_entry_count = 0
-    slot_count = maximum_influences - 1
 
     for vertex_id in rows_to_prune.tolist():
         row = projected[int(vertex_id)]
-        owner_column = int(owners[int(vertex_id)])
         active_columns = np.flatnonzero(row > weight_epsilon).astype(np.int32)
-        candidate_columns = active_columns[active_columns != owner_column]
+        active_weights = row[active_columns]
 
-        if slot_count <= 0:
-            selected_candidates = np.empty(0, dtype=np.int32)
-        else:
-            candidate_weights = row[candidate_columns]
-            cutoff_weight = -float(
-                np.partition(
-                    -candidate_weights,
-                    slot_count - 1,
-                )[slot_count - 1]
+        cutoff_weight = -float(
+            np.partition(
+                -active_weights,
+                maximum_influences - 1,
+            )[maximum_influences - 1]
+        )
+        strict_columns = active_columns[active_weights > cutoff_weight]
+        tied_columns = active_columns[active_weights == cutoff_weight]
+        remaining_slots = maximum_influences - int(strict_columns.size)
+
+        if tied_columns.size > remaining_slots:
+            cutoff_ties.append(int(vertex_id))
+            delta = (
+                influences[tied_columns]
+                - vertices[int(vertex_id)][np.newaxis, :]
             )
-            strict_columns = candidate_columns[candidate_weights > cutoff_weight]
-            tied_columns = candidate_columns[candidate_weights == cutoff_weight]
-            remaining_slots = slot_count - int(strict_columns.size)
+            squared_distances = np.einsum("ji,ji->j", delta, delta)
+            tie_order = np.lexsort(
+                (
+                    influences[tied_columns, 2],
+                    influences[tied_columns, 1],
+                    influences[tied_columns, 0],
+                    squared_distances,
+                )
+            )
+            ordered_ties = tied_columns[tie_order]
 
-            if tied_columns.size > remaining_slots:
-                cutoff_ties.append(int(vertex_id))
-                delta = (
-                    influences[tied_columns]
-                    - vertices[int(vertex_id)][np.newaxis, :]
-                )
-                squared_distances = np.einsum("ji,ji->j", delta, delta)
-                tie_order = np.lexsort(
-                    (
-                        influences[tied_columns, 2],
-                        influences[tied_columns, 1],
-                        influences[tied_columns, 0],
-                        squared_distances,
-                    )
-                )
-                ordered_ties = tied_columns[tie_order]
-
-                selected_boundary = int(ordered_ties[remaining_slots - 1])
-                excluded_boundary = int(ordered_ties[remaining_slots])
-                selected_distance = float(
-                    squared_distances[tie_order[remaining_slots - 1]]
-                )
-                excluded_distance = float(
-                    squared_distances[tie_order[remaining_slots]]
-                )
-                if selected_distance != excluded_distance:
-                    distance_resolved.append(int(vertex_id))
-                else:
-                    selected_position = tuple(
-                        float(value) for value in influences[selected_boundary]
-                    )
-                    excluded_position = tuple(
-                        float(value) for value in influences[excluded_boundary]
-                    )
-                    if selected_position == excluded_position:
-                        unresolved_coincident.append(int(vertex_id))
-                        continue
-                    spatial_resolved.append(int(vertex_id))
-
-                selected_ties = ordered_ties[:remaining_slots]
+            selected_boundary_index = remaining_slots - 1
+            excluded_boundary_index = remaining_slots
+            selected_distance = float(
+                squared_distances[tie_order[selected_boundary_index]]
+            )
+            excluded_distance = float(
+                squared_distances[tie_order[excluded_boundary_index]]
+            )
+            if selected_distance != excluded_distance:
+                distance_resolved.append(int(vertex_id))
             else:
-                selected_ties = tied_columns
+                selected_position = tuple(
+                    float(value)
+                    for value in influences[
+                        int(ordered_ties[selected_boundary_index])
+                    ]
+                )
+                excluded_position = tuple(
+                    float(value)
+                    for value in influences[
+                        int(ordered_ties[excluded_boundary_index])
+                    ]
+                )
+                if selected_position == excluded_position:
+                    unresolved_coincident.append(int(vertex_id))
+                    continue
+                spatial_resolved.append(int(vertex_id))
 
-            selected_candidates = np.concatenate(
-                (strict_columns, selected_ties)
-            ).astype(np.int32, copy=False)
+            selected_ties = ordered_ties[:remaining_slots]
+        else:
+            selected_ties = tied_columns
 
         selected_columns = np.concatenate(
-            (
-                np.asarray([owner_column], dtype=np.int32),
-                selected_candidates,
-            )
-        )
+            (strict_columns, selected_ties)
+        ).astype(np.int32, copy=False)
         selected_values = row[selected_columns].copy()
+
         discarded_entry_count += int(
-            effective_active_counts[int(vertex_id)] - selected_columns.size
+            active_columns.size - selected_columns.size
         )
         row.fill(0.0)
         row[selected_columns] = selected_values
@@ -187,24 +174,17 @@ def enforce_maximum_influences_by_geometry(
     )
 
 
-def _validated_weight_inputs(weights, owner_indices):
+def _validated_weights(weights):
     matrix = np.asarray(weights, dtype=np.float64)
-    owners = np.asarray(owner_indices, dtype=np.int32)
     if matrix.ndim != 2:
         raise ValueError("weights must be a two-dimensional matrix.")
-    if owners.shape != (matrix.shape[0],):
-        raise ValueError("owner_indices must contain one owner per vertex.")
     if matrix.shape[1] < 1:
         raise ValueError("weights must contain at least one influence.")
-    if owners.size and (
-        np.any(owners < 0) or np.any(owners >= matrix.shape[1])
-    ):
-        raise ValueError("owner_indices contains an invalid influence index.")
     if not np.all(np.isfinite(matrix)):
         raise ValueError("weights contains non-finite values.")
     if np.any(matrix < 0.0):
         raise ValueError("weights contains negative values.")
-    return matrix, owners
+    return matrix
 
 
 def _normalize_rows(weights):

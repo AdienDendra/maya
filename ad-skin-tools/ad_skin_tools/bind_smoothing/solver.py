@@ -1,4 +1,4 @@
-"""Smoothing pipeline for immutable blocking ownership."""
+"""Smoothing pipeline using blocking ownership only as the initial condition."""
 
 from dataclasses import dataclass
 import time
@@ -13,10 +13,6 @@ from ad_skin_tools.bind_smoothing.cutoff_projection import (
 from ad_skin_tools.bind_smoothing.diffusion import (
     BindDiffusionResult,
     diffuse_hard_ownership,
-)
-from ad_skin_tools.bind_smoothing.final_constraints import (
-    OwnerMaximumResult,
-    project_region_owner_to_maximum,
 )
 from ad_skin_tools.bind_smoothing.options import BindSmoothingOptions
 from ad_skin_tools.bind_smoothing.validation import (
@@ -36,12 +32,10 @@ class BindSmoothingResult:
     effective_maximum_influences: int
     diffusion_result: BindDiffusionResult
     projection_result: GeometricMaxInfluenceResult
-    owner_maximum_result: OwnerMaximumResult
     validation_result: BindWeightValidationResult
     input_validation_seconds: float
     diffusion_seconds: float
     maximum_influence_seconds: float
-    owner_maximum_seconds: float
     validation_seconds: float
     assembly_seconds: float
     elapsed_seconds: float
@@ -65,7 +59,7 @@ def solve_bind_smoothing(
     mutable_vertex_ids: Optional[Sequence[int]] = None,
     constrained_vertex_ids: Optional[Sequence[int]] = None,
 ) -> BindSmoothingResult:
-    """Smooth weights without recalculating or modifying blocking ownership."""
+    """Diffuse initial ownership, then apply neutral Max Influences."""
 
     started = time.perf_counter()
     input_started = time.perf_counter()
@@ -108,7 +102,6 @@ def solve_bind_smoothing(
     projection_started = time.perf_counter()
     projection_result = enforce_maximum_influences_by_geometry(
         weights=constrained_weights,
-        owner_indices=constrained_owners,
         vertex_positions=constrained_positions,
         influence_positions=influences,
         maximum_influences=effective_maximum,
@@ -128,27 +121,9 @@ def solve_bind_smoothing(
             "identical. First vertex IDs: {}".format(bad.tolist())
         )
 
-    owner_started = time.perf_counter()
-    owner_maximum_result = project_region_owner_to_maximum(
-        weights=projection_result.weights,
-        owner_indices=constrained_owners,
-    )
-    owner_maximum_seconds = time.perf_counter() - owner_started
-    if owner_maximum_result.owner_below_maximum_after:
-        bad = constrained_ids[
-            np.asarray(
-                owner_maximum_result.owner_below_maximum_after[:20],
-                dtype=np.int32,
-            )
-        ]
-        raise RuntimeError(
-            "Final blocking owner remains below another influence after owner "
-            "preservation. First vertex IDs: {}".format(bad.tolist())
-        )
-
     validation_started = time.perf_counter()
     validation_result = validate_bind_weights(
-        weights=owner_maximum_result.weights,
+        weights=projection_result.weights,
         owner_indices=constrained_owners,
         maximum_influences=effective_maximum,
         weight_epsilon=options.weight_epsilon,
@@ -161,7 +136,7 @@ def solve_bind_smoothing(
         diffusion_result.weights,
         dtype=np.float64,
     ).copy()
-    final_weights[constrained_ids] = owner_maximum_result.weights
+    final_weights[constrained_ids] = projection_result.weights
     assembly_seconds = time.perf_counter() - assembly_started
 
     return BindSmoothingResult(
@@ -172,12 +147,10 @@ def solve_bind_smoothing(
         effective_maximum_influences=effective_maximum,
         diffusion_result=diffusion_result,
         projection_result=projection_result,
-        owner_maximum_result=owner_maximum_result,
         validation_result=validation_result,
         input_validation_seconds=float(input_validation_seconds),
         diffusion_seconds=float(diffusion_seconds),
         maximum_influence_seconds=float(maximum_influence_seconds),
-        owner_maximum_seconds=float(owner_maximum_seconds),
         validation_seconds=float(validation_seconds),
         assembly_seconds=float(assembly_seconds),
         elapsed_seconds=float(time.perf_counter() - started),
