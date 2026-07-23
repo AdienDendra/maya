@@ -4,8 +4,10 @@ import builtins
 import importlib
 
 from ad_skin_tools.core import add_influence
+from ad_skin_tools.ui import global_owner_tag
 from ad_skin_tools.ui import joint_list
 from ad_skin_tools.ui import skin_operations
+from ad_skin_tools.ui import smoothing_controls
 
 
 importlib.reload(add_influence)
@@ -61,9 +63,13 @@ def _loaded_mesh_and_ui_targets():
 
 
 mesh, target_joints, staged_joints, staged_locks = _loaded_mesh_and_ui_targets()
+values = smoothing_controls.query_values()
 result = add_influence.add_influences_by_region(
     mesh=mesh,
     target_joints=target_joints,
+    smoothing_blend=values.blend,
+    smoothing_iterations=values.iterations,
+    global_owner_joint=global_owner_tag.global_owner_joint(),
 )
 
 joint_list.sync_after_flood_preserving_pending(
