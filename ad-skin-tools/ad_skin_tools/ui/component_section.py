@@ -92,7 +92,7 @@ def apply_component_flood() -> None:
 
         _set_flood_busy(
             True,
-            "Reading component falloff and redistributing weights...",
+            "Reading component falloff and blending weights toward target...",
         )
         cmds.waitCursor(state=True)
         wait_cursor_active = True
@@ -147,8 +147,8 @@ def apply_component_flood() -> None:
 
         if result.soft_selection_used:
             message = (
-                "Flood complete: {} of {} affected vertices set to {} "
-                "from {:.3f} to {:.3f}.{}"
+                "Flood complete: {} of {} affected vertices blended toward {}. "
+                "Final target weights {:.3f} to {:.3f}.{}"
             ).format(
                 result.flooded_vertex_count,
                 result.vertex_count,
@@ -341,7 +341,9 @@ def show_help() -> None:
             "Select exactly one target joint in the influence list, then select "
             "vertices, edges, or faces on the loaded mesh. With Soft Selection "
             "disabled, the target receives weight 1.0. With Soft Selection enabled, "
-            "Maya falloff controls the target weight.\n\n"
+            "Maya falloff controls the blend strength from current weights toward "
+            "target weight 1.0. The hard-selected center receives the full Flood and "
+            "the falloff fringe receives a proportional blend.\n\n"
             "Component Smooth\n"
             "Soft Selection multiplies Blend per vertex, so the hard selected area "
             "receives the full Blend value and the falloff area receives less. Select "
