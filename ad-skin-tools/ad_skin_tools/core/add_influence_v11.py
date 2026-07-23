@@ -170,14 +170,13 @@ def add_influences_by_region_v11(
         try:
             with undo_chunk("AD Skin Tool v11 Add Influence Smoke"):
                 stage_started = time.perf_counter()
-                for joint in targets:
-                    cmds.skinCluster(
-                        adapter.skin_cluster,
-                        edit=True,
-                        addInfluence=joint,
-                        weight=0.0,
-                    )
-                    mutation_recorded = True
+                cmds.skinCluster(
+                    adapter.skin_cluster,
+                    edit=True,
+                    addInfluence=list(targets),
+                    weight=0.0,
+                )
+                mutation_recorded = True
                 add_seconds = time.perf_counter() - stage_started
 
                 adapter = SkinClusterAdapter.from_mesh(mesh_shape)
