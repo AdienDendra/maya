@@ -15,10 +15,10 @@ from ad_skin_tools.core.skin_cluster import (
     find_skin_cluster,
 )
 from ad_skin_tools.core.undo import undo_chunk
-from ad_skin_tools.region_research.closest_region_ownership import (
+from ad_skin_tools.region.closest_region_ownership import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
 )
-from ad_skin_tools.region_research.ownership_pipeline import (
+from ad_skin_tools.region.ownership_pipeline import (
     OwnershipPipelineResult,
     solve_ownership_pipeline,
 )
@@ -224,25 +224,16 @@ def bind_object_automatic_surface(
 
 
 def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
-    """Print real production timing, excluding development validation."""
-
-    print("\n[AD Skin Tool - Production Bind Timing]")
-    print("SkinCluster:", result.skin_cluster)
+    print("\n[AD Skin Tool - Bind Skin]")
     print("Mesh:", result.mesh_transform)
+    print("Global Owner:", result.global_owner_joint or "<none>")
     print("Vertices:", result.vertex_count)
     print("Influences:", result.influence_count)
     print("Smoothing Blend:", result.smoothing_blend)
     print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
-    print("Ownership:", round(result.ownership_seconds, 6))
-    print("Final weight calculation:", round(result.weight_calculation_seconds, 6))
-    print("skinCluster creation:", round(result.skin_cluster_creation_seconds, 6))
-    print("Skin-column remap:", round(result.skin_column_remap_seconds, 6))
-    print("Custom weight write:", round(result.weight_write_seconds, 6))
-    print(
-        "Production total through completed write:",
-        round(result.production_elapsed_seconds, 6),
-    )
+    print("Smoothing mixed vertices:", result.smoothing_mixed_vertex_count)
+    print("Elapsed: {:.6f} s".format(result.production_elapsed_seconds))
 
 
 def _final_ownership_maps(influences, owner_indices):
