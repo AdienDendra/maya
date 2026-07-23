@@ -5,10 +5,10 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from ad_skin_tools.region_research.closest_region_ownership import (
+from ad_skin_tools.region.closest_region_ownership import (
     ClosestRegionOwnershipResult,
 )
-from ad_skin_tools.region_research.secondary_surface_facing import (
+from ad_skin_tools.region.secondary_surface_facing import (
     SecondarySurfaceFacingResult,
     classify_secondary_surface_facing,
 )
