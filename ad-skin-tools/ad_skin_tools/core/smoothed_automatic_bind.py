@@ -224,9 +224,10 @@ def bind_object_automatic_surface(
 
 
 def print_automatic_surface_report(result: AutomaticSurfaceBindResult) -> None:
+    global_owner = result.global_owner_joint or "<none>"
     print("\n[AD Skin Tool - Bind Skin]")
     print("Mesh:", result.mesh_transform)
-    print("Global Owner:", result.global_owner_joint or "<none>")
+    print("Global Owner:", global_owner)
     print("Vertices:", result.vertex_count)
     print("Influences:", result.influence_count)
     print("Smoothing Blend:", result.smoothing_blend)

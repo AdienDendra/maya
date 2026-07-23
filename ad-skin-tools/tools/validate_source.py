@@ -23,7 +23,7 @@ REQUIRED_PATHS = (
     "core/add_influence.py",
     "core/smoothed_automatic_bind.py",
     "core/undoable_skin_weights.py",
-    "region_research/ownership_pipeline.py",
+    "region/ownership_pipeline.py",
     "ui/component_section.py",
     "ui/joint_list.py",
     "ui/skin_operations.py",
@@ -32,7 +32,10 @@ REQUIRED_PATHS = (
 )
 
 FORBIDDEN_PATHS = (
-    "region",
+    "region_research",
+    "development",
+    "components/smooth_shared.py",
+    "components/smooth_optimizer_smoke.py",
     "components/flood_blend.py",
     "components/flood_v81.py",
     "components/smooth_undo.py",

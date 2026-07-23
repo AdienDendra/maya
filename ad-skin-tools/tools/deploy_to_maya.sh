@@ -121,7 +121,7 @@ required_files=(
     "$PACKAGE_SRC/core/influence_lock.py"
     "$PACKAGE_SRC/core/skin_cluster.py"
     "$PACKAGE_SRC/bind_smoothing/solver.py"
-    "$PACKAGE_SRC/region_research/ownership_pipeline.py"
+    "$PACKAGE_SRC/region/ownership_pipeline.py"
     "$PACKAGE_SRC/ui/component_section.py"
     "$PACKAGE_SRC/ui/joint_list.py"
     "$PACKAGE_SRC/ui/skin_operations.py"

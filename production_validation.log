@@ -1,0 +1,11 @@
+=== validate_source.py ===
+AD Skin Tools source validation failed:
+
+- historical version label bind_smoothing/options.py:29: v9.2
+- missing internal import core/automatic_surface_commands.py:12: ad_skin_tools.development
+- missing internal import core/automatic_surface_commands.py:13: ad_skin_tools.development
+validate_source exit: 1
+=== compileall ===
+compileall exit: 0
+=== git diff --check ===
+diff_check exit: 0
