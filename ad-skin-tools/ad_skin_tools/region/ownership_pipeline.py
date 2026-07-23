@@ -6,16 +6,16 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from ad_skin_tools.region_research.closest_region_ownership import (
+from ad_skin_tools.region.closest_region_ownership import (
     DEFAULT_DISTANCE_CHUNK_SIZE,
     ClosestRegionOwnershipResult,
     solve_closest_region_ownership,
 )
-from ad_skin_tools.region_research.closed_loop_ownership import (
+from ad_skin_tools.region.closed_loop_ownership import (
     ClosedLoopOwnershipResult,
     resolve_closed_loop_ownership,
 )
-from ad_skin_tools.region_research.global_owner_assignment import (
+from ad_skin_tools.region.global_owner_assignment import (
     GlobalOwnerAssignmentResult,
     assign_detached_to_global_owner,
 )
