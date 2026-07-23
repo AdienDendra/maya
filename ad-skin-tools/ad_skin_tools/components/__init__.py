@@ -4,4 +4,5 @@ __all__ = [
     "flood",
     "selection",
     "smooth",
+    "smooth_shared",
 ]
