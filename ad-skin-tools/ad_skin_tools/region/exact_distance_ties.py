@@ -6,7 +6,7 @@ from typing import Dict, Mapping, Tuple
 
 import numpy as np
 
-from ad_skin_tools.region_research.mesh_context import MeshOwnershipContext
+from ad_skin_tools.region.mesh_context import MeshOwnershipContext
 
 
 RESOLVED_BY_TOPOLOGY = "topology_neighbour"
