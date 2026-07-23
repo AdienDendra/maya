@@ -20,7 +20,7 @@ from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.influence_lock import locked_influences
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 from ad_skin_tools.core.undo import undo_chunk
-from ad_skin_tools.region_research.ownership_pipeline import (
+from ad_skin_tools.region.ownership_pipeline import (
     OwnershipPipelineResult,
     solve_ownership_pipeline,
 )
@@ -294,39 +294,29 @@ def add_influences_by_region(
 
 
 def print_report(result: AddInfluenceResult) -> None:
+    global_owner = (
+        result.ownership_pipeline.global_owner_assignment.global_owner_joint
+        or "<none>"
+    )
+    influence_count = len(result.existing_influences) + len(result.target_joints)
+    mixed_vertex_count = (
+        result.smoothing_result.diffusion_result.mixed_vertex_count
+        if result.smoothing_result is not None
+        else 0
+    )
     print("\n[AD Skin Tool - Add Influence]")
-    print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
-    print("Existing influences:", len(result.existing_influences))
+    print("Global Owner:", global_owner)
+    print("Vertices:", result.ownership_pipeline.vertex_count)
+    print("Influences:", influence_count)
     print("New influences:", len(result.target_joints))
-    print("Locked existing influences:", len(result.locked_influences))
     print("Claimed vertices:", result.claimed_vertex_count)
-    print("Local domain vertices:", result.local_domain_vertex_count)
     print("Smoothing Blend:", result.smoothing_blend)
     print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
-    print("SkinCluster Max Influences:", result.skin_maximum_influences)
-    print("Ownership:", round(result.ownership_seconds, 6))
-    print("Proposal + initial domain:", round(result.proposal_domain_seconds, 6))
-    print("Local weight read:", round(result.local_weight_read_seconds, 6))
-    print("Lock filtering + final domain:", round(result.claim_filter_seconds, 6))
-    print("Claim weight calculation:", round(result.weight_calculation_seconds, 6))
-    print("Add influence nodes:", round(result.add_influence_seconds, 6))
-    print("Skin metadata sync:", round(result.skin_metadata_seconds, 6))
-    print("Skin-column remap:", round(result.skin_column_remap_seconds, 6))
-    print("Custom weight write:", round(result.weight_write_seconds, 6))
-    print("Local validation:", round(result.validation_seconds, 6))
-    print("Production total:", round(result.production_elapsed_seconds, 6))
-    print("Per target:")
-    for item in result.diagnostics:
-        print(
-            "  {}: proposed={} | claimed={} | protected={}".format(
-                item.joint.split("|")[-1],
-                len(item.proposed_vertex_ids),
-                len(item.accepted_vertex_ids),
-                len(item.protected_vertex_ids),
-            )
-        )
+    print("Smoothing mixed vertices:", mixed_vertex_count)
+    print("Locked influences:", len(result.locked_influences))
+    print("Elapsed: {:.6f} s".format(result.production_elapsed_seconds))
 
 
 def _build_proposals(final_owners, targets, existing_count, vertex_count):
