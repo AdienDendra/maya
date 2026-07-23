@@ -33,6 +33,7 @@ def reload_modules():
 
     import ad_skin_tools.components.selection as component_selection_weights
     import ad_skin_tools.components.flood as component_flood
+    import ad_skin_tools.components.flood_blend as component_flood_blend
     import ad_skin_tools.components.smooth as component_smooth
 
     import ad_skin_tools.region_research.mesh_context as ownership_mesh_context
@@ -73,6 +74,7 @@ def reload_modules():
         undoable_skin_weights,
         component_selection_weights,
         component_flood,
+        component_flood_blend,
         component_smooth,
         ownership_mesh_context,
         ownership_exact_ties,
@@ -101,6 +103,8 @@ def reload_modules():
     importlib.reload(component_section)
     importlib.reload(tool_window)
 
+    component_section.flood = component_flood_blend
+
     _install_ui(
         tool_window,
         joint_list,
@@ -115,6 +119,7 @@ def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
+    from ad_skin_tools.components import flood_blend as component_flood_blend
     from ad_skin_tools.ui import (
         component_section,
         global_owner_tag,
@@ -123,6 +128,8 @@ def show(reload=False, auto_refresh=False):
         smoothing_bind_section,
         tool_window,
     )
+
+    component_section.flood = component_flood_blend
 
     _install_ui(
         tool_window,
