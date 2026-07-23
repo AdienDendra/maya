@@ -137,7 +137,6 @@ def apply_bind_skin() -> None:
     try:
         _TOOL_WINDOW._require_not_busy()
         _TOOL_WINDOW._require_unskinned_mesh()
-        _require_loaded_mesh_object_selected()
 
         joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
         if builtins.len(joints) < 2:
@@ -207,7 +206,6 @@ def apply_add_influence() -> None:
     try:
         _TOOL_WINDOW._require_not_busy()
         _TOOL_WINDOW._require_loaded_mesh()
-        _require_loaded_mesh_object_selected()
         if not _TOOL_WINDOW._STATE.get("has_skin_cluster"):
             raise RuntimeError(
                 "Add Influence requires an existing skinCluster.\n\n"
@@ -240,6 +238,7 @@ def apply_add_influence() -> None:
             _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
         )
         values = smoothing_controls.query_values()
+        tagged_global_owner = global_owner_tag.global_owner_joint()
         status = "Calculating final Region ownership for new influences..."
         if values.iterations > 0:
             status = (
@@ -257,6 +256,7 @@ def apply_add_influence() -> None:
             target_joints=targets,
             smoothing_blend=values.blend,
             smoothing_iterations=values.iterations,
+            global_owner_joint=tagged_global_owner,
         )
 
         joint_list.sync_after_flood_preserving_pending(
@@ -289,37 +289,6 @@ def apply_add_influence() -> None:
         _SKIN_OPERATIONS._set_add_influence_busy(False)
 
 
-def _require_loaded_mesh_object_selected() -> None:
-    """Require the loaded geometry itself, not a component, to be selected."""
-
-    _TOOL_WINDOW._require_loaded_mesh()
-    selected = cmds.ls(selection=True, long=True) or []
-    if not selected:
-        raise RuntimeError(
-            "Select the loaded geometry object before using "
-            "Bind Skin or Add Influence."
-        )
-
-    if any("." in item for item in selected):
-        raise RuntimeError(
-            "Bind Skin and Add Influence require an object selection.\n\n"
-            "Switch to Object Mode and select the loaded geometry."
-        )
-
-    loaded_shape = _TOOL_WINDOW._STATE.get("mesh_shape")
-    loaded_transform = _TOOL_WINDOW._STATE.get("mesh_transform")
-    selected_objects = set(
-        cmds.ls(selected, objectsOnly=True, long=True) or []
-    )
-    if (
-        loaded_shape not in selected_objects
-        and loaded_transform not in selected_objects
-    ):
-        raise RuntimeError(
-            "Select the geometry currently loaded in AD Skin Tool."
-        )
-
-
 def _set_common_enabled(enabled) -> None:
     if _BASE_SET_COMMON_ENABLED is not None:
         _BASE_SET_COMMON_ENABLED(enabled)
@@ -338,7 +307,6 @@ def show_help() -> None:
             "keeps Bind Skin and Add Influence in hard mode. Component Smooth "
             "requires at least 1 iteration.\n\n"
             "Binding\n"
-            "Bind Skin and Add Influence require the loaded geometry in Object Mode. "
             "Bind Skin starts from the final closest-region, Global Owner, and "
             "closed-loop ownership map. Add Influence uses the existing skin weights "
             "as fixed boundary context and changes only the unlocked rows claimed by "
