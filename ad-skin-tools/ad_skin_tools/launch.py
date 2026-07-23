@@ -11,6 +11,15 @@ def _install_ui(
     smoothing_bind_section,
     component_section,
 ):
+    # Install the joint-list refinement at the exact point where
+    # skin_operations captures the joint-list callbacks. Reassigning the
+    # module reference also prevents a stale alias after aggressive sys.modules
+    # clearing or Maya module reloads.
+    from ad_skin_tools.ui import joint_list_refine
+
+    joint_list_refine.install(joint_list)
+    skin_operations.joint_list = joint_list
+
     skin_operations.install(tool_window)
     global_owner_tag.install(tool_window, joint_list)
     smoothing_bind_section.install(tool_window, skin_operations)
@@ -103,8 +112,6 @@ def reload_modules():
     importlib.reload(component_section)
     importlib.reload(tool_window)
 
-    joint_list_refine.install(joint_list)
-
     _install_ui(
         tool_window,
         joint_list,
@@ -123,13 +130,10 @@ def show(reload=False, auto_refresh=False):
         component_section,
         global_owner_tag,
         joint_list,
-        joint_list_refine,
         skin_operations,
         smoothing_bind_section,
         tool_window,
     )
-
-    joint_list_refine.install(joint_list)
 
     _install_ui(
         tool_window,
