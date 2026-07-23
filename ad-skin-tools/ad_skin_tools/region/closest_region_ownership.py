@@ -6,11 +6,11 @@ from typing import Dict, Sequence, Tuple
 
 import numpy as np
 
-from ad_skin_tools.region_research.exact_distance_ties import (
+from ad_skin_tools.region.exact_distance_ties import (
     ExactDistanceTieResult,
     resolve_exact_distance_ties,
 )
-from ad_skin_tools.region_research.mesh_context import (
+from ad_skin_tools.region.mesh_context import (
     MeshOwnershipContext,
     build_mesh_ownership_context,
 )
