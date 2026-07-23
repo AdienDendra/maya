@@ -99,10 +99,14 @@ def add_influences_by_region_v11(
         existing_count=len(existing),
         vertex_count=context.vertex_count,
     )
-    proposed_domain_ids = _one_ring_domain(
-        proposed_ids,
-        context.adjacency,
-        context.vertex_count,
+    proposed_domain_ids = (
+        proposed_ids
+        if options.iterations == 0
+        else _one_ring_domain(
+            proposed_ids,
+            context.adjacency,
+            context.vertex_count,
+        )
     )
     proposal_domain_seconds = time.perf_counter() - proposal_started
 
@@ -244,6 +248,16 @@ def print_report(result: AddInfluenceV11Result) -> None:
     print("Skin-column remap:", round(result.skin_column_remap_seconds, 6))
     print("Custom weight write:", round(result.weight_write_seconds, 6))
     print("Production total:", round(result.production_elapsed_seconds, 6))
+    print("Per target:")
+    for item in result.diagnostics:
+        print(
+            "  {}: proposed={} | claimed={} | protected={}".format(
+                item.joint.split("|")[-1],
+                len(item.proposed_vertex_ids),
+                len(item.accepted_vertex_ids),
+                len(item.protected_vertex_ids),
+            )
+        )
 
 
 def _build_proposals(final_owners, targets, existing_count, vertex_count):
