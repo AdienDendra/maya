@@ -242,6 +242,9 @@ def add_influences_by_region(
                     )
                     write_seconds = time.perf_counter() - stage_started
 
+                production_elapsed_seconds = time.perf_counter() - started
+
+                if claimed_ids.size:
                     stage_started = time.perf_counter()
                     _validate_local_write(
                         adapter=adapter,
@@ -250,8 +253,6 @@ def add_influences_by_region(
                         maximum_influences=effective_maximum,
                     )
                     validation_seconds = time.perf_counter() - stage_started
-
-                production_elapsed_seconds = time.perf_counter() - started
         except Exception:
             if mutation_recorded:
                 _undo_failed_operation()
