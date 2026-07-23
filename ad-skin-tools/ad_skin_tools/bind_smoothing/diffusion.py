@@ -1,9 +1,8 @@
 """Fast topology diffusion for Bind Skin, Add Influence, and Component Smooth.
 
 Blend is the fraction moved toward the connected-neighbour average in one
-iteration. Iterations is the exact number of Jacobi repetitions. The numerical
-result matches the previous dense implementation, but neighbour accumulation is
-performed with NumPy ``bincount`` and reusable matrix buffers.
+iteration. Iterations is the exact number of Jacobi repetitions. Neighbour
+accumulation uses NumPy ``bincount`` and reusable matrix buffers.
 """
 
 from dataclasses import dataclass
@@ -18,6 +17,19 @@ MINIMUM_BLEND = 0.0
 MAXIMUM_BLEND = 1.0
 MINIMUM_ITERATIONS = 0
 MAXIMUM_ITERATIONS = 10
+
+
+@dataclass(frozen=True)
+class WeightDiffusionResult:
+    """Diffused normalized rows from the shared Jacobi matrix kernel."""
+
+    weights: np.ndarray
+    mutable_vertex_ids: Tuple[int, ...]
+    changed_vertex_ids: Tuple[int, ...]
+    topology_setup_seconds: float
+    iteration_seconds: float
+    finalization_seconds: float
+    elapsed_seconds: float
 
 
 @dataclass(frozen=True)
@@ -68,6 +80,52 @@ class BindDiffusionResult:
         return len(self.dominant_owner_changed_vertex_ids)
 
 
+def diffuse_weight_matrix(
+    initial_weights: np.ndarray,
+    adjacency: Sequence[Sequence[int]],
+    iterations: int,
+    blend: float = DEFAULT_BLEND,
+    mutable_vertex_ids: Optional[Sequence[int]] = None,
+    row_blend_factors: Optional[Sequence[float]] = None,
+    contributor_mask: Optional[Sequence[bool]] = None,
+) -> WeightDiffusionResult:
+    """Diffuse an existing normalized weight matrix with the shared Jacobi kernel.
+
+    ``row_blend_factors`` multiplies the artist-facing Blend per row. This is used
+    by Component Smooth for Maya Soft Selection falloff. ``contributor_mask``
+    controls which fixed or mutable rows may contribute to neighbour averages.
+    Bind Skin and Add Influence use the default all-one factors and all rows as
+    contributors.
+    """
+
+    (
+        initial,
+        mutable_ids,
+        factors,
+        contributors,
+    ) = _validate_weight_matrix_inputs(
+        initial_weights=initial_weights,
+        adjacency=adjacency,
+        iterations=iterations,
+        blend=blend,
+        mutable_vertex_ids=mutable_vertex_ids,
+        row_blend_factors=row_blend_factors,
+        contributor_mask=contributor_mask,
+    )
+    tolerance = _numerical_tolerance(initial.shape[1])
+    return _run_weight_diffusion(
+        initial=initial,
+        adjacency=adjacency,
+        iterations=int(iterations),
+        blend=float(blend),
+        mutable_ids=mutable_ids,
+        row_blend_factors=factors,
+        contributor_mask=contributors,
+        tolerance=tolerance,
+        preserve_scalar_path=False,
+    )
+
+
 def diffuse_hard_ownership(
     owner_indices: np.ndarray,
     adjacency: Sequence[Sequence[int]],
@@ -104,60 +162,20 @@ def diffuse_hard_ownership(
     blend = float(blend)
     tolerance = _numerical_tolerance(int(influence_count))
 
-    baseline = initial
-    current = initial.copy()
-
-    topology_started = time.perf_counter()
-    degrees, source_ids, neighbour_ids, update_ids, update_all_rows = (
-        _build_update_topology(adjacency, mutable_ids)
+    matrix_result = _run_weight_diffusion(
+        initial=initial,
+        adjacency=adjacency,
+        iterations=iterations,
+        blend=blend,
+        mutable_ids=mutable_ids,
+        row_blend_factors=None,
+        contributor_mask=None,
+        tolerance=tolerance,
+        preserve_scalar_path=True,
     )
-    topology_setup_seconds = time.perf_counter() - topology_started
-
-    iteration_started = time.perf_counter()
-    if iterations > 0 and blend > 0.0 and update_ids.size:
-        next_weights = np.empty_like(current)
-        neighbour_sums = np.empty_like(current)
-        keep_fraction = 1.0 - blend
-
-        if update_all_rows:
-            neighbour_scale = blend / degrees.astype(np.float64)
-            for _ in range(iterations):
-                _accumulate_neighbour_sums(
-                    neighbour_sums,
-                    current,
-                    source_ids,
-                    neighbour_ids,
-                )
-                np.multiply(current, keep_fraction, out=next_weights)
-                next_weights += neighbour_sums * neighbour_scale[:, np.newaxis]
-                current, next_weights = next_weights, current
-        else:
-            update_scale = blend / degrees[update_ids].astype(np.float64)
-            for _ in range(iterations):
-                _accumulate_neighbour_sums(
-                    neighbour_sums,
-                    current,
-                    source_ids,
-                    neighbour_ids,
-                )
-                next_weights[:] = current
-                next_weights[update_ids] = (
-                    current[update_ids] * keep_fraction
-                    + neighbour_sums[update_ids]
-                    * update_scale[:, np.newaxis]
-                )
-                current, next_weights = next_weights, current
-    iteration_seconds = time.perf_counter() - iteration_started
+    current = matrix_result.weights
 
     finalization_started = time.perf_counter()
-    current = _normalize_rows(current, tolerance=tolerance)
-    current[np.abs(current) <= tolerance] = 0.0
-    current = _normalize_rows(current, tolerance=tolerance)
-
-    changed_vertex_ids = np.where(
-        np.any(np.abs(current - baseline) > tolerance, axis=1)
-    )[0].astype(np.int32)
-
     active_counts = np.count_nonzero(
         current > tolerance,
         axis=1,
@@ -185,17 +203,15 @@ def diffuse_hard_ownership(
         if row_sums.size
         else 0.0
     )
-    finalization_seconds = time.perf_counter() - finalization_started
+    diagnostic_seconds = time.perf_counter() - finalization_started
 
     return BindDiffusionResult(
         weights=current,
         owner_indices=owners.copy(),
         iterations=iterations,
         blend=blend,
-        mutable_vertex_ids=tuple(int(value) for value in mutable_ids.tolist()),
-        changed_vertex_ids=tuple(
-            int(value) for value in changed_vertex_ids.tolist()
-        ),
+        mutable_vertex_ids=matrix_result.mutable_vertex_ids,
+        changed_vertex_ids=matrix_result.changed_vertex_ids,
         mixed_vertex_ids=tuple(
             int(value) for value in mixed_vertex_ids.tolist()
         ),
@@ -207,6 +223,152 @@ def diffuse_hard_ownership(
         iteration_mixed_counts=tuple(),
         active_influence_histogram=active_influence_histogram,
         maximum_row_sum_error=maximum_row_sum_error,
+        topology_setup_seconds=matrix_result.topology_setup_seconds,
+        iteration_seconds=matrix_result.iteration_seconds,
+        finalization_seconds=(
+            matrix_result.finalization_seconds + diagnostic_seconds
+        ),
+        elapsed_seconds=float(time.perf_counter() - started),
+    )
+
+
+def _run_weight_diffusion(
+    initial,
+    adjacency,
+    iterations,
+    blend,
+    mutable_ids,
+    row_blend_factors,
+    contributor_mask,
+    tolerance,
+    preserve_scalar_path,
+):
+    started = time.perf_counter()
+    baseline = np.asarray(initial, dtype=np.float64)
+    current = baseline.copy()
+    vertex_count = int(current.shape[0])
+
+    topology_started = time.perf_counter()
+    if preserve_scalar_path and row_blend_factors is None and contributor_mask is None:
+        degrees, source_ids, neighbour_ids, update_ids, update_all_rows = (
+            _build_update_topology(adjacency, mutable_ids)
+        )
+        effective_blend = None
+    else:
+        factors = (
+            np.ones(vertex_count, dtype=np.float64)
+            if row_blend_factors is None
+            else np.asarray(row_blend_factors, dtype=np.float64)
+        )
+        contributors = (
+            np.ones(vertex_count, dtype=bool)
+            if contributor_mask is None
+            else np.asarray(contributor_mask, dtype=bool)
+        )
+        degrees, source_ids, neighbour_ids = _build_filtered_update_topology(
+            adjacency=adjacency,
+            mutable_ids=mutable_ids,
+            contributor_mask=contributors,
+        )
+        effective_blend = float(blend) * factors
+        update_ids = mutable_ids[
+            (degrees[mutable_ids] > 0)
+            & (effective_blend[mutable_ids] > 0.0)
+        ]
+        update_all_rows = bool(
+            update_ids.size == vertex_count
+            and np.array_equal(
+                update_ids,
+                np.arange(vertex_count, dtype=np.int32),
+            )
+        )
+    topology_setup_seconds = time.perf_counter() - topology_started
+
+    iteration_started = time.perf_counter()
+    if int(iterations) > 0 and float(blend) > 0.0 and update_ids.size:
+        next_weights = np.empty_like(current)
+        neighbour_sums = np.empty_like(current)
+
+        if effective_blend is None:
+            keep_fraction = 1.0 - float(blend)
+            if update_all_rows:
+                neighbour_scale = (
+                    float(blend) / degrees.astype(np.float64)
+                )
+                for _ in range(int(iterations)):
+                    _accumulate_neighbour_sums(
+                        neighbour_sums,
+                        current,
+                        source_ids,
+                        neighbour_ids,
+                    )
+                    np.multiply(current, keep_fraction, out=next_weights)
+                    next_weights += (
+                        neighbour_sums
+                        * neighbour_scale[:, np.newaxis]
+                    )
+                    current, next_weights = next_weights, current
+            else:
+                update_scale = (
+                    float(blend)
+                    / degrees[update_ids].astype(np.float64)
+                )
+                for _ in range(int(iterations)):
+                    _accumulate_neighbour_sums(
+                        neighbour_sums,
+                        current,
+                        source_ids,
+                        neighbour_ids,
+                    )
+                    next_weights[:] = current
+                    next_weights[update_ids] = (
+                        current[update_ids] * keep_fraction
+                        + neighbour_sums[update_ids]
+                        * update_scale[:, np.newaxis]
+                    )
+                    current, next_weights = next_weights, current
+        else:
+            active_blend = effective_blend[update_ids]
+            keep_fraction = 1.0 - active_blend
+            update_scale = (
+                active_blend
+                / degrees[update_ids].astype(np.float64)
+            )
+            for _ in range(int(iterations)):
+                _accumulate_neighbour_sums(
+                    neighbour_sums,
+                    current,
+                    source_ids,
+                    neighbour_ids,
+                )
+                next_weights[:] = current
+                next_weights[update_ids] = (
+                    current[update_ids]
+                    * keep_fraction[:, np.newaxis]
+                    + neighbour_sums[update_ids]
+                    * update_scale[:, np.newaxis]
+                )
+                current, next_weights = next_weights, current
+    iteration_seconds = time.perf_counter() - iteration_started
+
+    finalization_started = time.perf_counter()
+    current = _normalize_rows(current, tolerance=tolerance)
+    current[np.abs(current) <= tolerance] = 0.0
+    current = _normalize_rows(current, tolerance=tolerance)
+
+    changed_vertex_ids = np.where(
+        np.any(np.abs(current - baseline) > tolerance, axis=1)
+    )[0].astype(np.int32)
+    finalization_seconds = time.perf_counter() - finalization_started
+
+    return WeightDiffusionResult(
+        weights=current,
+        mutable_vertex_ids=tuple(
+            int(value) for value in mutable_ids.tolist()
+        ),
+        changed_vertex_ids=tuple(
+            int(value) for value in changed_vertex_ids.tolist()
+        ),
         topology_setup_seconds=float(topology_setup_seconds),
         iteration_seconds=float(iteration_seconds),
         finalization_seconds=float(finalization_seconds),
@@ -288,6 +450,46 @@ def _build_update_topology(adjacency, mutable_ids):
     return degrees, source_ids, neighbour_ids, update_ids, update_all_rows
 
 
+def _build_filtered_update_topology(
+    adjacency,
+    mutable_ids,
+    contributor_mask,
+):
+    vertex_count = len(adjacency)
+    degrees = np.zeros(vertex_count, dtype=np.int32)
+    source_ids_parts = []
+    neighbour_ids_parts = []
+
+    for source_id in mutable_ids.tolist():
+        neighbours = np.asarray(
+            adjacency[int(source_id)],
+            dtype=np.int32,
+        )
+        if neighbours.size:
+            neighbours = neighbours[contributor_mask[neighbours]]
+        degrees[int(source_id)] = int(neighbours.size)
+        if neighbours.size:
+            source_ids_parts.append(
+                np.full(
+                    neighbours.size,
+                    int(source_id),
+                    dtype=np.int32,
+                )
+            )
+            neighbour_ids_parts.append(neighbours)
+
+    if source_ids_parts:
+        source_ids = np.concatenate(source_ids_parts)
+        neighbour_ids = np.concatenate(neighbour_ids_parts)
+    else:
+        source_ids = np.empty(0, dtype=np.int32)
+        neighbour_ids = np.empty(0, dtype=np.int32)
+
+    if source_ids.size != neighbour_ids.size:
+        raise RuntimeError("Failed to filter mesh adjacency consistently.")
+    return degrees, source_ids, neighbour_ids
+
+
 def _validate_inputs(
     owner_indices,
     adjacency,
@@ -313,14 +515,119 @@ def _validate_inputs(
                 "First vertex IDs: {}".format(invalid_rows.tolist())
             )
 
-    if len(adjacency) != owners.size:
+    _validate_adjacency(adjacency, int(owners.size))
+    _validate_iteration_options(iterations, blend)
+
+    if initial_weights is None:
+        initial = _build_one_hot_weights(
+            owner_indices=owners,
+            influence_count=influence_count,
+        )
+    else:
+        initial = _validated_normalized_matrix(
+            initial_weights,
+            vertex_count=int(owners.size),
+            influence_count=influence_count,
+            label="initial_weights",
+        )
+
+    mutable_ids = _resolve_mutable_ids(
+        mutable_vertex_ids,
+        int(owners.size),
+    )
+    return owners, initial, mutable_ids
+
+
+def _validate_weight_matrix_inputs(
+    initial_weights,
+    adjacency,
+    iterations,
+    blend,
+    mutable_vertex_ids,
+    row_blend_factors,
+    contributor_mask,
+):
+    matrix = np.asarray(initial_weights, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[1] < 1:
         raise ValueError(
-            "Adjacency row count must match owner_indices: {} != {}.".format(
+            "initial_weights must be a two-dimensional matrix "
+            "with at least one influence column."
+        )
+    vertex_count, influence_count = matrix.shape
+    _validate_adjacency(adjacency, int(vertex_count))
+    _validate_iteration_options(iterations, blend)
+    initial = _validated_normalized_matrix(
+        matrix,
+        vertex_count=int(vertex_count),
+        influence_count=int(influence_count),
+        label="initial_weights",
+    )
+    mutable_ids = _resolve_mutable_ids(
+        mutable_vertex_ids,
+        int(vertex_count),
+    )
+
+    if row_blend_factors is None:
+        factors = np.ones(vertex_count, dtype=np.float64)
+    else:
+        factors = np.asarray(
+            row_blend_factors,
+            dtype=np.float64,
+        ).reshape(-1)
+        if factors.size != vertex_count:
+            raise ValueError(
+                "row_blend_factors must contain one value per weight row."
+            )
+        if not np.all(np.isfinite(factors)):
+            raise ValueError("row_blend_factors contains non-finite values.")
+        if np.any(factors < 0.0) or np.any(factors > 1.0):
+            raise ValueError(
+                "row_blend_factors must stay between 0.0 and 1.0."
+            )
+
+    if contributor_mask is None:
+        contributors = np.ones(vertex_count, dtype=bool)
+    else:
+        contributors = np.asarray(
+            contributor_mask,
+            dtype=bool,
+        ).reshape(-1)
+        if contributors.size != vertex_count:
+            raise ValueError(
+                "contributor_mask must contain one value per weight row."
+            )
+
+    return initial, mutable_ids, factors, contributors
+
+
+def _validate_adjacency(adjacency, vertex_count):
+    if len(adjacency) != int(vertex_count):
+        raise ValueError(
+            "Adjacency row count must match vertex count: {} != {}.".format(
                 len(adjacency),
-                owners.size,
+                int(vertex_count),
             )
         )
 
+    for vertex_id, neighbours in enumerate(adjacency):
+        for neighbour_id in neighbours:
+            neighbour_id = int(neighbour_id)
+            if neighbour_id < 0 or neighbour_id >= int(vertex_count):
+                raise ValueError(
+                    "Adjacency for vertex {} contains invalid neighbour {}.".format(
+                        vertex_id,
+                        neighbour_id,
+                    )
+                )
+            if neighbour_id == vertex_id:
+                raise ValueError(
+                    "Adjacency must not contain self-edges. Vertex: {}.".format(
+                        vertex_id
+                    )
+                )
+
+
+def _validate_iteration_options(iterations, blend):
     iterations = int(iterations)
     if iterations < MINIMUM_ITERATIONS or iterations > MAXIMUM_ITERATIONS:
         raise ValueError(
@@ -339,70 +646,62 @@ def _validate_inputs(
             )
         )
 
-    vertex_count = int(owners.size)
-    for vertex_id, neighbours in enumerate(adjacency):
-        for neighbour_id in neighbours:
-            neighbour_id = int(neighbour_id)
-            if neighbour_id < 0 or neighbour_id >= vertex_count:
-                raise ValueError(
-                    "Adjacency for vertex {} contains invalid neighbour {}.".format(
-                        vertex_id,
-                        neighbour_id,
-                    )
-                )
-            if neighbour_id == vertex_id:
-                raise ValueError(
-                    "Adjacency must not contain self-edges. Vertex: {}.".format(
-                        vertex_id
-                    )
-                )
 
-    if initial_weights is None:
-        initial = _build_one_hot_weights(
-            owner_indices=owners,
-            influence_count=influence_count,
+def _validated_normalized_matrix(
+    values,
+    vertex_count,
+    influence_count,
+    label,
+):
+    matrix = np.asarray(values, dtype=np.float64).copy()
+    if matrix.shape != (int(vertex_count), int(influence_count)):
+        raise ValueError(
+            "{} must have shape ({}, {}).".format(
+                label,
+                int(vertex_count),
+                int(influence_count),
+            )
         )
-    else:
-        initial = np.asarray(initial_weights, dtype=np.float64).copy()
-        if initial.shape != (vertex_count, influence_count):
-            raise ValueError(
-                "initial_weights must have shape ({}, {}).".format(
-                    vertex_count,
-                    influence_count,
-                )
-            )
-        if not np.all(np.isfinite(initial)):
-            raise ValueError("initial_weights contains non-finite values.")
-        tolerance = _numerical_tolerance(influence_count)
-        if np.any(initial < -tolerance):
-            bad = np.where(np.any(initial < -tolerance, axis=1))[0][:20]
-            raise ValueError(
-                "initial_weights contains negative values. First vertex IDs: {}"
-                .format(bad.tolist())
-            )
-        initial = np.maximum(initial, 0.0)
-        row_sums = np.sum(initial, axis=1, dtype=np.float64)
-        bad = np.where(np.abs(row_sums - 1.0) > 1e-8)[0]
-        if bad.size:
-            raise ValueError(
-                "initial_weights rows must total 1.0. First vertex IDs: {}".format(
-                    bad[:20].tolist()
-                )
-            )
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("{} contains non-finite values.".format(label))
 
-    if mutable_vertex_ids is None:
-        mutable_ids = np.arange(vertex_count, dtype=np.int32)
-    else:
-        mutable_ids = np.asarray(
-            sorted({int(value) for value in mutable_vertex_ids}),
-            dtype=np.int32,
+    tolerance = _numerical_tolerance(influence_count)
+    if np.any(matrix < -tolerance):
+        bad = np.where(np.any(matrix < -tolerance, axis=1))[0][:20]
+        raise ValueError(
+            "{} contains negative values. First vertex IDs: {}".format(
+                label,
+                bad.tolist(),
+            )
         )
-        if mutable_ids.size and (
-            np.any(mutable_ids < 0) or np.any(mutable_ids >= vertex_count)
-        ):
-            raise ValueError("mutable_vertex_ids contains an invalid vertex ID.")
 
-    return owners, initial, mutable_ids
+    matrix = np.maximum(matrix, 0.0)
+    row_sums = np.sum(matrix, axis=1, dtype=np.float64)
+    bad = np.where(np.abs(row_sums - 1.0) > 1e-8)[0]
+    if bad.size:
+        raise ValueError(
+            "{} rows must total 1.0. First vertex IDs: {}".format(
+                label,
+                bad[:20].tolist(),
+            )
+        )
+    return matrix
+
+
+def _resolve_mutable_ids(values, vertex_count):
+    if values is None:
+        return np.arange(int(vertex_count), dtype=np.int32)
+
+    mutable_ids = np.asarray(
+        sorted({int(value) for value in values}),
+        dtype=np.int32,
+    )
+    if mutable_ids.size and (
+        np.any(mutable_ids < 0)
+        or np.any(mutable_ids >= int(vertex_count))
+    ):
+        raise ValueError("mutable_vertex_ids contains an invalid vertex ID.")
+    return mutable_ids
 
 
 def _build_one_hot_weights(owner_indices, influence_count):
