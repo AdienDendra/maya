@@ -2,6 +2,7 @@
 
 __all__ = [
     "flood",
+    "flood_blend",
     "selection",
     "smooth",
 ]
