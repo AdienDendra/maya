@@ -1,4 +1,4 @@
-"""Weighted component Flood for existing skin weights."""
+"""Component Flood using Maya falloff as blend strength."""
 
 from dataclasses import dataclass
 from typing import Tuple
@@ -70,7 +70,7 @@ def flood_selected_components_to_joint(
     target_joint: str,
     target_locked_override: bool = False,
 ) -> ComponentFloodResult:
-    """Replace the target weight using Maya component falloff."""
+    """Blend writable skin rows toward the target using Maya falloff."""
 
     selection_before = cmds.ls(selection=True, long=True) or []
     scope = collect_weighted_mesh_vertices(mesh_shape, mesh_transform)
@@ -110,14 +110,14 @@ def flood_selected_components_to_joint(
     influence_added = False
     mutation_recorded = False
     selected_vertex_ids = np.asarray(scope.vertex_ids, dtype=np.int32)
-    requested_target_weights = np.asarray(
+    falloff_strengths = np.asarray(
         scope.falloff_weights,
         dtype=np.float64,
     )
     flooded_vertex_ids = np.empty(0, dtype=np.int32)
     protected_vertex_ids = np.empty(0, dtype=np.int32)
     flooded_target_weights = np.empty(0, dtype=np.float64)
-    active_locked_influences = tuple()
+    active_locked_influences: Tuple[str, ...] = tuple()
 
     try:
         try:
@@ -168,7 +168,7 @@ def flood_selected_components_to_joint(
                     write_weights, flooded_target_weights = _build_weight_rows(
                         baseline=writable_before,
                         target_column=int(target_column),
-                        target_values=requested_target_weights[writable_mask],
+                        falloff_strengths=falloff_strengths[writable_mask],
                     )
                     apply_undoable_weights(
                         skin_cluster=adapter.skin_cluster,
@@ -227,6 +227,7 @@ def print_component_flood_report(result: ComponentFloodResult) -> None:
     print("SkinCluster:", result.skin_cluster)
     print("Mesh:", result.mesh_transform)
     print("Target influence:", result.target_joint)
+    print("Falloff interpretation: blend strength toward target")
     print("Soft Selection enabled:", result.soft_selection_enabled)
     print("Soft Selection weights used:", result.soft_selection_used)
     print("Affected vertices:", result.vertex_count)
@@ -234,7 +235,7 @@ def print_component_flood_report(result: ComponentFloodResult) -> None:
     print("Protected vertices:", result.protected_vertex_count)
     if result.flooded_target_weights:
         print(
-            "Target weight range: {:.8f} - {:.8f}".format(
+            "Final target weight range: {:.8f} - {:.8f}".format(
                 result.minimum_target_weight,
                 result.maximum_target_weight,
             )
@@ -247,39 +248,48 @@ def print_component_flood_report(result: ComponentFloodResult) -> None:
     print("SkinCluster influences:", result.influence_count)
 
 
-def _build_weight_rows(baseline, target_column: int, target_values):
+def _build_weight_rows(
+    baseline,
+    target_column: int,
+    falloff_strengths,
+):
+    """Blend normalized skin rows toward one-hot target ownership.
+
+    For each row and falloff alpha:
+
+        result = baseline * (1 - alpha)
+        result[target] += alpha
+
+    Alpha zero preserves the row. Alpha one produces exact target ownership.
+    Donor weights never increase and an existing target weight never decreases.
+    """
+
     baseline = np.asarray(baseline, dtype=np.float64)
-    target_values = np.clip(
-        np.asarray(target_values, dtype=np.float64),
+    if baseline.ndim != 2:
+        raise ValueError("baseline must be a two-dimensional weight matrix.")
+
+    target_column = int(target_column)
+    if target_column < 0 or target_column >= baseline.shape[1]:
+        raise ValueError("target_column is outside the weight matrix.")
+
+    alpha = np.clip(
+        np.asarray(falloff_strengths, dtype=np.float64),
         0.0,
         1.0,
-    )
-
-    result = baseline.copy()
-    donors = baseline.copy()
-    donors[:, int(target_column)] = 0.0
-    donor_totals = donors.sum(axis=1)
-
-    numerical_zero = (
-        float(np.finfo(np.float64).eps)
-        * max(1, baseline.shape[1])
-        * 16.0
-    )
-    redistributable = donor_totals > numerical_zero
-
-    if np.any(redistributable):
-        remaining = 1.0 - target_values[redistributable]
-        result[redistributable] = (
-            donors[redistributable]
-            / donor_totals[redistributable, None]
-            * remaining[:, None]
+    ).reshape(-1)
+    if alpha.shape[0] != baseline.shape[0]:
+        raise ValueError(
+            "falloff_strengths must contain one value per weight row."
         )
-        result[redistributable, int(target_column)] = (
-            target_values[redistributable]
-        )
+    if not np.all(np.isfinite(baseline)):
+        raise RuntimeError("Component Flood received non-finite baseline weights.")
+    if not np.all(np.isfinite(alpha)):
+        raise RuntimeError("Component Flood received non-finite falloff values.")
 
-    # A target-only row has no previous donor to receive returned weight.
-    applied_target_values = result[:, int(target_column)].copy()
+    result = baseline * (1.0 - alpha[:, None])
+    result[:, target_column] += alpha
+
+    applied_target_values = result[:, target_column].copy()
     return result, applied_target_values
 
 
