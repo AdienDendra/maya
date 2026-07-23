@@ -1,16 +1,15 @@
 name: Production cleanup
 
 on:
-  push:
+  pull_request:
     branches:
-      - v12.3-production-cleanup
+      - main
 
 permissions:
   contents: write
 
 jobs:
   cleanup:
-    if: ${{ !contains(github.event.head_commit.message, '[production-cleanup]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out cleanup branch
