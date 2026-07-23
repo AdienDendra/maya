@@ -9,7 +9,7 @@ import maya.cmds as cmds
 import numpy as np
 
 from ad_skin_tools.core import opposite_axis
-from ad_skin_tools.region_research.mesh_context import MeshOwnershipContext
+from ad_skin_tools.region.mesh_context import MeshOwnershipContext
 
 
 SINGLE_OWNER = "single_owner"
