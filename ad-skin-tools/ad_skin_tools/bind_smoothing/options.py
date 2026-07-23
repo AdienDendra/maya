@@ -26,7 +26,7 @@ class BindSmoothingOptions:
 
     @property
     def relaxation(self) -> float:
-        """Compatibility alias for pre-v9.2 callers."""
+        """Compatibility alias for callers using the previous option name."""
         return self.blend
 
     def validated(self) -> "BindSmoothingOptions":
