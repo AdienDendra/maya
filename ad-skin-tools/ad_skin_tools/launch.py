@@ -34,6 +34,7 @@ def reload_modules():
     import ad_skin_tools.components.selection as component_selection_weights
     import ad_skin_tools.components.flood as component_flood
     import ad_skin_tools.components.smooth as component_smooth
+    import ad_skin_tools.components.smooth_shared as component_smooth_shared
 
     import ad_skin_tools.region_research.mesh_context as ownership_mesh_context
     import ad_skin_tools.region_research.exact_distance_ties as ownership_exact_ties
@@ -87,6 +88,7 @@ def reload_modules():
         smoothing_options,
         smoothing_validation,
         smoothing_solver,
+        component_smooth_shared,
         smoothed_automatic_bind,
         automatic_surface_commands,
         add_influence,
@@ -100,6 +102,8 @@ def reload_modules():
     importlib.reload(smoothing_bind_section)
     importlib.reload(component_section)
     importlib.reload(tool_window)
+
+    component_section.smooth = component_smooth_shared
 
     _install_ui(
         tool_window,
@@ -115,6 +119,7 @@ def show(reload=False, auto_refresh=False):
     if reload:
         reload_modules()
 
+    from ad_skin_tools.components import smooth_shared as component_smooth_shared
     from ad_skin_tools.ui import (
         component_section,
         global_owner_tag,
@@ -123,6 +128,8 @@ def show(reload=False, auto_refresh=False):
         smoothing_bind_section,
         tool_window,
     )
+
+    component_section.smooth = component_smooth_shared
 
     _install_ui(
         tool_window,
