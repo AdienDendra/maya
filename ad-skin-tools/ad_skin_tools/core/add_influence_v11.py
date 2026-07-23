@@ -137,10 +137,14 @@ def add_influences_by_region_v11(
         target_by_vertex=target_by_vertex,
         vertex_count=context.vertex_count,
     )
-    local_domain_ids = _one_ring_domain(
-        claimed_ids,
-        context.adjacency,
-        context.vertex_count,
+    local_domain_ids = (
+        claimed_ids
+        if options.iterations == 0
+        else _one_ring_domain(
+            claimed_ids,
+            context.adjacency,
+            context.vertex_count,
+        )
     )
     claim_filter_seconds = time.perf_counter() - filter_started
 
