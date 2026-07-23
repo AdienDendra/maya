@@ -35,16 +35,6 @@ def reload_modules():
     import ad_skin_tools.components.flood as component_flood
     import ad_skin_tools.components.smooth as component_smooth
 
-    import ad_skin_tools.region.maya_scene as region_maya_scene
-    import ad_skin_tools.region.distance_ranking as region_distance_ranking
-    import ad_skin_tools.region.exact_tie as region_exact_tie
-    import ad_skin_tools.region.connectivity as region_connectivity
-    import ad_skin_tools.region.facing as region_facing
-    import ad_skin_tools.region.closed_loop_consensus as region_closed_loop_consensus
-    import ad_skin_tools.region.closed_loop_opposite_guard as region_opposite_guard
-    import ad_skin_tools.region.ambiguous_loop_distance_tiebreak as region_tiebreak
-    import ad_skin_tools.region.solver as region_solver
-
     import ad_skin_tools.region_research.mesh_context as ownership_mesh_context
     import ad_skin_tools.region_research.exact_distance_ties as ownership_exact_ties
     import ad_skin_tools.region_research.closest_region_ownership as ownership_closest
@@ -60,7 +50,6 @@ def reload_modules():
     import ad_skin_tools.bind_smoothing.validation as smoothing_validation
     import ad_skin_tools.bind_smoothing.solver as smoothing_solver
 
-    import ad_skin_tools.core.joint_automatic_bind as joint_automatic_bind
     import ad_skin_tools.core.smoothed_automatic_bind as smoothed_automatic_bind
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.add_influence as add_influence
@@ -85,15 +74,6 @@ def reload_modules():
         component_selection_weights,
         component_flood,
         component_smooth,
-        region_maya_scene,
-        region_distance_ranking,
-        region_exact_tie,
-        region_connectivity,
-        region_facing,
-        region_closed_loop_consensus,
-        region_opposite_guard,
-        region_tiebreak,
-        region_solver,
         ownership_mesh_context,
         ownership_exact_ties,
         ownership_closest,
@@ -107,7 +87,6 @@ def reload_modules():
         smoothing_options,
         smoothing_validation,
         smoothing_solver,
-        joint_automatic_bind,
         smoothed_automatic_bind,
         automatic_surface_commands,
         add_influence,

@@ -6,7 +6,6 @@ __all__ = [
     "compat",
     "component_selection",
     "influence_lock",
-    "joint_automatic_bind",
     "mesh",
     "selection",
     "skin_cluster",
