@@ -52,6 +52,7 @@ class AddInfluenceResult:
     smoothing_blend: float
     smoothing_iterations: int
     effective_maximum_influences: int
+    skin_maximum_influences: int
     smoothing_result: Optional[BindSmoothingResult]
     ownership_pipeline: OwnershipPipelineResult
     ownership_seconds: float
@@ -60,6 +61,7 @@ class AddInfluenceResult:
     claim_filter_seconds: float
     weight_calculation_seconds: float
     add_influence_seconds: float
+    skin_metadata_seconds: float
     skin_column_remap_seconds: float
     weight_write_seconds: float
     validation_seconds: float
@@ -195,9 +197,12 @@ def add_influences_by_region(
 
     mutation_recorded = False
     add_seconds = 0.0
+    metadata_seconds = 0.0
     remap_seconds = 0.0
     write_seconds = 0.0
     validation_seconds = 0.0
+    skin_maximum = 0
+    production_elapsed_seconds = 0.0
     try:
         try:
             with undo_chunk("AD Skin Tool Add Influence"):
@@ -212,6 +217,14 @@ def add_influences_by_region(
                 add_seconds = time.perf_counter() - stage_started
 
                 adapter = SkinClusterAdapter.from_mesh(mesh_shape)
+
+                stage_started = time.perf_counter()
+                skin_maximum = _ensure_maximum_influences_metadata(
+                    adapter.skin_cluster,
+                    effective_maximum,
+                )
+                metadata_seconds = time.perf_counter() - stage_started
+
                 stage_started = time.perf_counter()
                 weights_to_write = _weights_in_skin_order(
                     adapter,
@@ -237,6 +250,8 @@ def add_influences_by_region(
                         maximum_influences=effective_maximum,
                     )
                     validation_seconds = time.perf_counter() - stage_started
+
+                production_elapsed_seconds = time.perf_counter() - started
         except Exception:
             if mutation_recorded:
                 _undo_failed_operation()
@@ -260,6 +275,7 @@ def add_influences_by_region(
         smoothing_blend=float(options.blend),
         smoothing_iterations=int(options.iterations),
         effective_maximum_influences=int(effective_maximum),
+        skin_maximum_influences=int(skin_maximum),
         smoothing_result=smoothing_result,
         ownership_pipeline=pipeline,
         ownership_seconds=float(ownership_seconds),
@@ -268,10 +284,11 @@ def add_influences_by_region(
         claim_filter_seconds=float(claim_filter_seconds),
         weight_calculation_seconds=float(weight_calculation_seconds),
         add_influence_seconds=float(add_seconds),
+        skin_metadata_seconds=float(metadata_seconds),
         skin_column_remap_seconds=float(remap_seconds),
         weight_write_seconds=float(write_seconds),
         validation_seconds=float(validation_seconds),
-        production_elapsed_seconds=float(time.perf_counter() - started),
+        production_elapsed_seconds=float(production_elapsed_seconds),
     )
 
 
@@ -287,12 +304,14 @@ def print_report(result: AddInfluenceResult) -> None:
     print("Smoothing Blend:", result.smoothing_blend)
     print("Smoothing Iterations:", result.smoothing_iterations)
     print("Effective Max Influences:", result.effective_maximum_influences)
+    print("SkinCluster Max Influences:", result.skin_maximum_influences)
     print("Ownership:", round(result.ownership_seconds, 6))
     print("Proposal + initial domain:", round(result.proposal_domain_seconds, 6))
     print("Local weight read:", round(result.local_weight_read_seconds, 6))
     print("Lock filtering + final domain:", round(result.claim_filter_seconds, 6))
     print("Claim weight calculation:", round(result.weight_calculation_seconds, 6))
     print("Add influence nodes:", round(result.add_influence_seconds, 6))
+    print("Skin metadata sync:", round(result.skin_metadata_seconds, 6))
     print("Skin-column remap:", round(result.skin_column_remap_seconds, 6))
     print("Custom weight write:", round(result.weight_write_seconds, 6))
     print("Local validation:", round(result.validation_seconds, 6))
@@ -543,6 +562,32 @@ def _protected_mask(weights, influences, locked):
         np.abs(weights[:, locked_columns]) > tolerance,
         axis=1,
     )
+
+
+def _ensure_maximum_influences_metadata(skin_cluster, required_maximum):
+    """Raise Maya's stored max-influence metadata without rebuilding weights."""
+
+    attribute = "{}.maxInfluences".format(skin_cluster)
+    if not cmds.objExists(attribute):
+        raise RuntimeError(
+            "skinCluster Max Influences attribute is unavailable:\n{}".format(
+                attribute
+            )
+        )
+
+    current = int(cmds.getAttr(attribute))
+    required = int(required_maximum)
+    target = max(current, required)
+    if current < target:
+        cmds.setAttr(attribute, target)
+
+    stored = int(cmds.getAttr(attribute))
+    if stored < target:
+        raise RuntimeError(
+            "Maya did not store the required Max Influences metadata. "
+            "Required: {} | Stored: {}".format(target, stored)
+        )
+    return stored
 
 
 def _weights_in_skin_order(adapter, source_influences, source_weights):
