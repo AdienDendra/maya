@@ -33,6 +33,7 @@ REQUIRED_PATHS = (
 
 FORBIDDEN_PATHS = (
     "region",
+    "components/flood_blend.py",
     "components/flood_v81.py",
     "components/smooth_undo.py",
     "components/undoable_weights.py",
@@ -111,7 +112,7 @@ def _validate_required_paths(errors: list[str]) -> None:
 def _validate_forbidden_paths(errors: list[str]) -> None:
     for relative in FORBIDDEN_PATHS:
         if (PACKAGE_ROOT / relative).exists():
-            errors.append("superseded runtime path still exists: {}".format(relative))
+            errors.append("superseded runtime file still exists: {}".format(relative))
 
 
 def _validate_internal_imports(
