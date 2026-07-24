@@ -56,6 +56,7 @@ def reload_modules():
 
     import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
+    import ad_skin_tools.ui.joint_drag_selection as joint_drag_selection
     import ad_skin_tools.ui.global_owner_tag as global_owner_tag
     import ad_skin_tools.ui.skin_operations as skin_operations
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
@@ -95,6 +96,7 @@ def reload_modules():
 
     importlib.reload(smoothing_controls)
     importlib.reload(joint_list)
+    importlib.reload(joint_drag_selection)
     importlib.reload(global_owner_tag)
     importlib.reload(skin_operations)
     importlib.reload(smoothing_bind_section)
@@ -118,6 +120,7 @@ def show(reload=False, auto_refresh=False):
     from ad_skin_tools.ui import (
         component_section,
         global_owner_tag,
+        joint_drag_selection,
         joint_list,
         skin_operations,
         smoothing_bind_section,
@@ -133,3 +136,4 @@ def show(reload=False, auto_refresh=False):
         component_section,
     )
     tool_window.show(auto_refresh=auto_refresh)
+    joint_drag_selection.install(tool_window.CTRL_JOINT_LIST)
