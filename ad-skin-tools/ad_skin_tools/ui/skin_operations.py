@@ -8,6 +8,8 @@ import maya.cmds as cmds
 from ad_skin_tools.core import add_influence
 from ad_skin_tools.ui import joint_list
 
+
+CTRL_LOAD_MESH_BUTTON = "adSkin_loadMeshButton"
 CTRL_ADD_INFLUENCE_BUTTON = "adSkin_addInfluenceButton"
 
 _TOOL_WINDOW = None
@@ -90,8 +92,14 @@ def _build_skin_cluster_section() -> None:
         label="Joints: 0",
         align="left",
     )
-    _TOOL_WINDOW._button_row(
-        [("Load Mesh", lambda *_: _TOOL_WINDOW.load_skin_weight())],
+    _named_button_row(
+        [
+            (
+                CTRL_LOAD_MESH_BUTTON,
+                "Load Mesh",
+                lambda *_: _TOOL_WINDOW.load_skin_weight(),
+            )
+        ],
         height=30,
     )
     cmds.setParent("..")
