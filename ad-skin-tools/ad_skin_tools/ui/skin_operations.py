@@ -11,12 +11,17 @@ from ad_skin_tools.ui import joint_list
 CTRL_ADD_INFLUENCE_BUTTON = "adSkin_addInfluenceButton"
 
 _TOOL_WINDOW = None
+_ORIGINAL_LOAD_SKIN_WEIGHT = None
+_ORIGINAL_SYNC_LOADED_SKIN_CONTEXT = None
 
 
 def install(tool_window_module) -> None:
     """Configure the active skin operation UI."""
 
     global _TOOL_WINDOW
+    global _ORIGINAL_LOAD_SKIN_WEIGHT
+    global _ORIGINAL_SYNC_LOADED_SKIN_CONTEXT
+
     _TOOL_WINDOW = tool_window_module
 
     joint_list.configure(tool_window_module)
@@ -33,6 +38,16 @@ def install(tool_window_module) -> None:
     )
     tool_window_module._set_bind_busy = _set_bind_busy
     tool_window_module.show_help = show_help
+
+    tool_window_module._set_option_menu_items = _set_skin_cluster_field_items
+
+    if tool_window_module.load_skin_weight is not load_skin_weight:
+        _ORIGINAL_LOAD_SKIN_WEIGHT = tool_window_module.load_skin_weight
+        _ORIGINAL_SYNC_LOADED_SKIN_CONTEXT = (
+            tool_window_module._sync_loaded_skin_context
+        )
+        tool_window_module.load_skin_weight = load_skin_weight
+        tool_window_module._sync_loaded_skin_context = _sync_loaded_skin_context
 
     tool_window_module.WINDOW_LABEL = "AD Skin Weights Tool"
     tool_window_module.WINDOW_HEIGHT = 665
@@ -51,7 +66,11 @@ def _build_skin_cluster_section() -> None:
 
     _TOOL_WINDOW._label_control_row(
         "Skin Cluster",
-        lambda: cmds.optionMenu(_TOOL_WINDOW.CTRL_SKIN_MENU),
+        lambda: cmds.textField(
+            _TOOL_WINDOW.CTRL_SKIN_MENU,
+            text="<no skinCluster>",
+            editable=False,
+        ),
     )
     cmds.text(
         _TOOL_WINDOW.CTRL_MESH_LABEL,
@@ -60,8 +79,9 @@ def _build_skin_cluster_section() -> None:
     )
     cmds.text(
         _TOOL_WINDOW.CTRL_MODE_LABEL,
-        label="Mode: No object loaded",
-        align="left",
+        label="",
+        visible=False,
+        manage=False,
     )
     cmds.text(
         _TOOL_WINDOW.CTRL_JOINT_LABEL,
@@ -76,6 +96,60 @@ def _build_skin_cluster_section() -> None:
 
     cmds.setParent("..")
     cmds.setParent("..")
+
+
+def load_skin_weight(silent=False):
+    """Run the canonical loader, then apply compact display labels."""
+
+    if _ORIGINAL_LOAD_SKIN_WEIGHT is None:
+        return
+    _ORIGINAL_LOAD_SKIN_WEIGHT(silent=silent)
+    _refresh_mesh_context_labels()
+
+
+def _sync_loaded_skin_context():
+    """Run the canonical skin refresh, then apply compact display labels."""
+
+    if _ORIGINAL_SYNC_LOADED_SKIN_CONTEXT is None:
+        raise RuntimeError("Skin-context refresh is unavailable.")
+    result = _ORIGINAL_SYNC_LOADED_SKIN_CONTEXT()
+    _refresh_mesh_context_labels()
+    return result
+
+
+def _set_skin_cluster_field_items(control_name, items) -> None:
+    """Compatibility replacement for the former one-item optionMenu helper."""
+
+    value = items[0] if items else "<no skinCluster>"
+    if cmds.textField(control_name, exists=True):
+        cmds.textField(control_name, edit=True, text=str(value))
+
+
+def _refresh_mesh_context_labels() -> None:
+    if _TOOL_WINDOW is None:
+        return
+
+    state = _TOOL_WINDOW._STATE
+    skin_cluster = state.get("skin_cluster") or "<no skinCluster>"
+    if cmds.textField(_TOOL_WINDOW.CTRL_SKIN_MENU, exists=True):
+        cmds.textField(
+            _TOOL_WINDOW.CTRL_SKIN_MENU,
+            edit=True,
+            text=str(skin_cluster),
+        )
+
+    mesh_transform = state.get("mesh_transform")
+    mesh_label = _short_dag_name(mesh_transform) if mesh_transform else "<none>"
+    if cmds.text(_TOOL_WINDOW.CTRL_MESH_LABEL, exists=True):
+        cmds.text(
+            _TOOL_WINDOW.CTRL_MESH_LABEL,
+            edit=True,
+            label="Mesh: {}".format(mesh_label),
+        )
+
+
+def _short_dag_name(node) -> str:
+    return str(node).rsplit("|", 1)[-1]
 
 
 def _build_operation_sections() -> None:
