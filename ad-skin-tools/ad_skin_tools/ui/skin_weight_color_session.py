@@ -38,6 +38,7 @@ class ColorSession:
     color_set: str
     previous_color_set: object
     display_options: dict
+    display_colors: object
     owned_nodes: set = field(default_factory=set)
 
 
@@ -68,12 +69,16 @@ def ensure(mesh_shape, mesh_transform):
 
     cleanup()
     with without_undo(), preserve_selection():
-        stale_found = _purge_visual_history(mesh_shape, mesh_transform)
         display_options = _query_display_options(mesh_transform)
+        display_colors = _query_display_colors(mesh_shape)
+        stale_found = _purge_visual_history(mesh_shape, mesh_transform)
         if stale_found:
             # A lost legacy Python session could leave preview shading enabled.
+            # Treat that state as preview-owned rather than restoring it later.
             display_options["colorShadedDisplay"] = False
+            display_colors = False
             _set_color_display_enabled(mesh_transform, False)
+            _set_shape_display_colors(mesh_shape, False)
 
         previous_color_set = _current_non_preview_color_set(mesh_transform)
         color_set = _unique_color_set_name(_all_color_sets(mesh_transform))
@@ -98,6 +103,7 @@ def ensure(mesh_shape, mesh_transform):
             color_set=color_set,
             previous_color_set=previous_color_set,
             display_options=display_options,
+            display_colors=display_colors,
             owned_nodes=owned_nodes,
         )
     return _SESSION
@@ -132,7 +138,7 @@ def set_colors(mesh_shape, mesh_transform, rgb):
     with without_undo(), preserve_selection():
         _set_current_color_set(current.mesh_transform, current.color_set)
         before = _history_nodes(current.mesh_shape)
-        # Maya 2025 rejects explicit None for the optional MDGModifier.
+        # Maya rejects explicit None for the optional MDGModifier in newer APIs.
         mesh_fn.setVertexColors(colors, vertex_ids)
         current.owned_nodes.update(
             _tag_new_visual_nodes(current.mesh_shape, before)
@@ -165,6 +171,12 @@ def cleanup() -> None:
             _restore_display_options(
                 current.mesh_transform,
                 current.display_options,
+            )
+            # Vertex-color writes may enable this shape attribute independently
+            # of polyOptions. Restore it last so the assigned shader is visible.
+            _restore_display_colors(
+                current.mesh_shape,
+                current.display_colors,
             )
             cmds.refresh(force=True)
     finally:
@@ -401,6 +413,16 @@ def _query_display_options(mesh_transform):
     return result
 
 
+def _query_display_colors(mesh_shape):
+    plug = "{}.displayColors".format(mesh_shape)
+    if not cmds.objExists(plug):
+        return None
+    try:
+        return bool(cmds.getAttr(plug))
+    except Exception:
+        return None
+
+
 def _enable_color_display(mesh_transform):
     cmds.polyOptions(
         mesh_transform,
@@ -418,6 +440,22 @@ def _set_color_display_enabled(mesh_transform, enabled):
         )
     except Exception:
         pass
+
+
+def _set_shape_display_colors(mesh_shape, enabled):
+    plug = "{}.displayColors".format(mesh_shape)
+    if not cmds.objExists(plug):
+        return
+    try:
+        cmds.setAttr(plug, bool(enabled))
+    except Exception:
+        pass
+
+
+def _restore_display_colors(mesh_shape, value):
+    if value is None:
+        return
+    _set_shape_display_colors(mesh_shape, bool(value))
 
 
 def _restore_display_options(mesh_transform, options):
