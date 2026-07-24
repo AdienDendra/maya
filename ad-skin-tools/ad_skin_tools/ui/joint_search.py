@@ -325,9 +325,6 @@ def _sorted_display_order(joints, display_labels):
                 ),
             )
 
-        _TOOL_WINDOW._STATE[_STATE_SORT_KEY] = SORT_A_TO_Z
-        _set_sort_buttons(SORT_A_TO_Z)
-
     return sorted(joints, key=key)
 
 
@@ -362,8 +359,10 @@ def _update_pending_sort_availability() -> None:
             pass
 
     state = _TOOL_WINDOW._STATE
-    if not has_pending and state.get(_STATE_SORT_KEY) == SORT_PENDING_JOINTS:
-        state[_STATE_SORT_KEY] = SORT_A_TO_Z
+    mode = state.get(_STATE_SORT_KEY, SORT_A_TO_Z)
+    if has_pending:
+        _set_sort_buttons(mode)
+    elif mode == SORT_PENDING_JOINTS:
         _set_sort_buttons(SORT_A_TO_Z)
 
 
