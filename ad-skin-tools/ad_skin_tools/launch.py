@@ -62,7 +62,13 @@ def reload_modules():
     import ad_skin_tools.ui.skin_operations as skin_operations
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
     import ad_skin_tools.ui.component_section as component_section
+    import ad_skin_tools.ui.skin_weight_mode as skin_weight_mode
     import ad_skin_tools.ui.tool_window as tool_window
+
+    try:
+        skin_weight_mode.shutdown()
+    except Exception:
+        pass
 
     for module in [
         compat,
@@ -103,6 +109,7 @@ def reload_modules():
     importlib.reload(skin_operations)
     importlib.reload(smoothing_bind_section)
     importlib.reload(component_section)
+    importlib.reload(skin_weight_mode)
     importlib.reload(tool_window)
 
     _install_ui(
@@ -126,6 +133,7 @@ def show(reload=False, auto_refresh=False):
         joint_list,
         joint_search,
         skin_operations,
+        skin_weight_mode,
         smoothing_bind_section,
         tool_window,
     )
@@ -144,3 +152,4 @@ def show(reload=False, auto_refresh=False):
         tool_window.CTRL_JOINT_LIST,
         selection_pruner=joint_search.prune_hidden_selection,
     )
+    skin_weight_mode.install(tool_window, joint_list)
