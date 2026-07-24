@@ -3,6 +3,8 @@
 import maya.cmds as cmds
 
 
+CTRL_LISTED_JOINTS_VALUE = "adSkin_listedJointCountValue"
+
 _TOOL_WINDOW = None
 _SKIN_OPERATIONS = None
 
@@ -54,7 +56,7 @@ def align_visual_controls(
     visual_label.setText("Skin Weight Visual:")
 
     # Maya rows start controls after LABEL_WIDTH + CONTROL_GAP. Both Qt rows
-    # already contain a 3 px explicit spacer, so compensate in label width.
+    # contain a 3 px explicit spacer, so compensate in the fixed label width.
     explicit_spacer = 3
     label_width = max(
         0,
@@ -107,10 +109,20 @@ def _build_skin_cluster_section() -> None:
     _TOOL_WINDOW._label_control_row(
         "Listed Joints",
         lambda: cmds.text(
-            _TOOL_WINDOW.CTRL_JOINT_LABEL,
+            CTRL_LISTED_JOINTS_VALUE,
             label="0",
             align="left",
         ),
+    )
+
+    # Skin Weight Visual uses CTRL_JOINT_LABEL as its insertion anchor. Keep a
+    # hidden standalone control in the parent column so the Qt rows are placed
+    # beneath Listed Joints rather than inside its formLayout.
+    cmds.text(
+        _TOOL_WINDOW.CTRL_JOINT_LABEL,
+        label="",
+        visible=False,
+        manage=False,
     )
 
     _SKIN_OPERATIONS._named_button_row(
@@ -148,7 +160,7 @@ def _update_listed_joint_count() -> None:
     if _TOOL_WINDOW is None:
         return
     _set_text(
-        _TOOL_WINDOW.CTRL_JOINT_LABEL,
+        CTRL_LISTED_JOINTS_VALUE,
         str(len(_state().get("joints", []))),
     )
 
