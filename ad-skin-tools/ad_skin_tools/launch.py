@@ -32,15 +32,20 @@ def _install_post_show_ui(
     joint_drag_selection,
     skin_weight_mode,
     skin_weight_mode_integration,
+    skin_weight_visual_overlay,
     skin_operations,
     mesh_context_display,
 ):
-    """Install Qt integrations that require built Maya controls."""
+    """Install Qt and Viewport 2.0 integrations after Maya builds controls."""
 
     joint_search.install(tool_window)
     joint_drag_selection.install(
         tool_window.CTRL_JOINT_LIST,
         selection_pruner=joint_search.prune_hidden_selection,
+    )
+    skin_weight_visual_overlay.prepare(
+        skin_weight_mode,
+        tool_window,
     )
     skin_weight_mode_integration.prepare(
         skin_weight_mode,
@@ -51,6 +56,7 @@ def _install_post_show_ui(
         tool_window,
         joint_list,
     )
+    skin_weight_visual_overlay.install()
     mesh_context_display.align_visual_controls(
         skin_weight_mode,
         skin_weight_mode_integration,
@@ -72,6 +78,7 @@ def reload_modules():
     import ad_skin_tools.core.skin_cluster as skin_cluster
     import ad_skin_tools.core.component_selection as component_selection
     import ad_skin_tools.core.influence_lock as influence_lock
+    import ad_skin_tools.core.skin_weight_events as skin_weight_events
     import ad_skin_tools.core.undoable_skin_weights as undoable_skin_weights
 
     import ad_skin_tools.components.selection as component_selection_weights
@@ -99,6 +106,8 @@ def reload_modules():
 
     import ad_skin_tools.ui.qt_helpers as qt_helpers
     import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
+    import ad_skin_tools.ui.skin_weight_visual_draw as skin_weight_visual_draw
+    import ad_skin_tools.ui.skin_weight_visual_overlay as skin_weight_visual_overlay
     import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.joint_drag_selection as joint_drag_selection
@@ -112,6 +121,10 @@ def reload_modules():
     import ad_skin_tools.ui.skin_weight_mode_integration as skin_weight_mode_integration
     import ad_skin_tools.ui.tool_window as tool_window
 
+    try:
+        skin_weight_visual_overlay.shutdown()
+    except Exception:
+        pass
     try:
         skin_weight_mode_integration.shutdown()
     except Exception:
@@ -134,6 +147,7 @@ def reload_modules():
             skin_cluster,
             component_selection,
             influence_lock,
+            skin_weight_events,
             undoable_skin_weights,
             component_selection_weights,
             component_flood,
@@ -156,6 +170,8 @@ def reload_modules():
             add_influence,
             qt_helpers,
             skin_weight_ramps,
+            skin_weight_visual_draw,
+            skin_weight_visual_overlay,
             smoothing_controls,
             joint_list,
             joint_drag_selection,
@@ -186,6 +202,7 @@ def show(reload=False, auto_refresh=False):
         skin_operations,
         skin_weight_mode,
         skin_weight_mode_integration,
+        skin_weight_visual_overlay,
         smoothing_bind_section,
         tool_window,
     )
@@ -207,6 +224,7 @@ def show(reload=False, auto_refresh=False):
         joint_drag_selection,
         skin_weight_mode,
         skin_weight_mode_integration,
+        skin_weight_visual_overlay,
         skin_operations,
         mesh_context_display,
     )
