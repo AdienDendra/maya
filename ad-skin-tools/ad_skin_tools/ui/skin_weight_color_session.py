@@ -1,4 +1,4 @@
-"""Ephemeral direct-mesh colors for Skin Weight Visual v13.10.
+"""Ephemeral direct-mesh colors for Skin Weight Visual.
 
 The loaded skinned mesh remains the live display and component-selection target.
 Visual commands are excluded from Maya's undo queue, and every preview history
@@ -14,7 +14,7 @@ import maya.cmds as cmds
 
 COLOR_SET_BASE = "__adSkinWeightPreview__"
 OWNER_ATTRIBUTE = "adSkinWeightVisualOwner"
-OWNER_VALUE = "v13.10"
+OWNER_VALUE = "ephemeral-color-session"
 
 _COLOR_NODE_TYPES = frozenset(
     (
@@ -71,7 +71,7 @@ def ensure(mesh_shape, mesh_transform):
         stale_found = _purge_visual_history(mesh_shape, mesh_transform)
         display_options = _query_display_options(mesh_transform)
         if stale_found:
-            # A lost v13.7 Python session could leave preview shading enabled.
+            # A lost legacy Python session could leave preview shading enabled.
             display_options["colorShadedDisplay"] = False
             _set_color_display_enabled(mesh_transform, False)
 
