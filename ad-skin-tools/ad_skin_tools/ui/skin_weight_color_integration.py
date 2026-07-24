@@ -79,9 +79,11 @@ def request_refresh(*_):
     _REFRESH_QUEUED = True
     try:
         cmds.evalDeferred(_deferred_refresh)
-    except Exception:
+    except Exception as exc:
         _REFRESH_QUEUED = False
-        _refresh_now()
+        cmds.warning(
+            "Skin Weight Visual could not queue a safe refresh: {}".format(exc)
+        )
 
 
 def _deferred_refresh():
@@ -92,7 +94,6 @@ def _deferred_refresh():
 
 
 def _refresh_now():
-    original = _ORIGINALS.get("request_refresh")
     if _MODE is None or not _MODE._mode_is_active():
         return
 
@@ -101,8 +102,6 @@ def _refresh_now():
     refresh = getattr(_MODE, "refresh", None)
     if callable(refresh):
         refresh()
-    elif callable(original):
-        original()
 
 
 def _ensure_preview(mesh_shape, mesh_transform):
