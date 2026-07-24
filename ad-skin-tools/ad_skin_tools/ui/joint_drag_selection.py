@@ -1,10 +1,12 @@
-"""Plain left-drag range selection for Maya's custom ``TtreeView``.
+"""Live plain left-drag range selection for Maya's custom ``TtreeView``.
 
-Maya's ``cmds.treeView`` is exposed to Qt as a custom Autodesk ``TtreeView``
-widget rather than a ``QTreeView``.  This module therefore leaves hit-testing
-and range selection to Maya itself: a completed plain left-drag is translated
-into one native Shift-click at the release position.
+Maya exposes ``cmds.treeView`` to Qt as a custom Autodesk ``TtreeView`` rather
+than a ``QTreeView``. Hit-testing and range selection therefore remain native:
+a plain left press is translated into a normal click, then drag movement is
+translated into throttled Shift-clicks so the highlighted range updates live.
 """
+
+import time
 
 from maya import OpenMayaUI as omui
 
@@ -13,14 +15,19 @@ from ad_skin_tools.core.compat import import_qt_modules
 
 _FILTER = None
 _WIDGET = None
+_PREVIEW_INTERVAL_SECONDS = 0.02
 
 
-def install(control_name: str) -> bool:
-    """Install drag selection on an existing Maya ``treeView`` control.
+def install(control_name: str, selection_pruner=None) -> bool:
+    """Install optional live drag selection on a Maya ``treeView`` control.
 
-    Failure is intentionally non-fatal.  Native click, Ctrl-click, and
-    Shift-click selection remain available if Maya does not expose the widget
-    as expected on a particular version or platform.
+    ``selection_pruner`` is called after each native range update. Search uses
+    it to remove hidden rows from the live selection without changing normal
+    click, Ctrl-click, or Shift-click behaviour.
+
+    Failure is intentionally non-fatal. Native Maya selection remains
+    available if the internal widget cannot be resolved on a Maya version or
+    platform.
     """
 
     global _FILTER
@@ -62,7 +69,10 @@ def install(control_name: str) -> bool:
                 super().__init__(target_widget)
                 self.widget = target_widget
                 self.press_position = None
+                self.last_preview_position = None
+                self.last_preview_time = 0.0
                 self.dragging = False
+                self.active = False
                 self.sending_synthetic_click = False
 
             def eventFilter(self, watched, event):
@@ -78,74 +88,92 @@ def install(control_name: str) -> bool:
                     if event.modifiers() != no_modifier:
                         return False
 
-                    self.press_position = _mouse_event_position(event)
-                    return False
+                    position = QtCore.QPoint(_mouse_event_position(event))
+                    self.active = True
+                    self.press_position = position
+                    self.last_preview_position = position
+
+                    # Replace the consumed physical press with one complete
+                    # native click. This preserves ordinary single selection
+                    # while leaving TtreeView free for synthetic Shift-clicks
+                    # during the physical drag.
+                    self._send_click(position, no_modifier)
+                    return True
 
                 if event_type == event_types.MouseMove:
-                    if self.press_position is None:
+                    if not self.active or self.press_position is None:
                         return False
                     if event.modifiers() != no_modifier:
                         self._reset()
-                        return False
+                        return True
                     if not (event.buttons() & left_button):
                         self._reset()
-                        return False
+                        return True
 
-                    position = _mouse_event_position(event)
+                    position = QtCore.QPoint(_mouse_event_position(event))
                     if not self.dragging:
                         distance = (
                             position - self.press_position
                         ).manhattanLength()
                         if distance < QtWidgets.QApplication.startDragDistance():
-                            return False
+                            return True
                         self.dragging = True
 
-                    # Once the threshold is crossed, prevent Maya's custom
-                    # widget from interpreting the motion as another gesture.
+                    if self._preview_is_due(position):
+                        self._send_range_preview(position)
                     return True
 
                 if event_type == event_types.MouseButtonRelease:
+                    if not self.active:
+                        return False
                     if event.button() != left_button:
                         self._reset()
                         return False
 
-                    if not self.dragging:
-                        self._reset()
-                        return False
-
-                    release_position = QtCore.QPoint(
-                        _mouse_event_position(event)
-                    )
+                    position = QtCore.QPoint(_mouse_event_position(event))
+                    if self.dragging and position != self.last_preview_position:
+                        self._send_range_preview(position)
                     self._reset()
-
-                    # Defer until the original release has finished.  Maya's
-                    # native TtreeView then receives a normal Shift-click and
-                    # performs its own row hit-testing and range selection.
-                    QtCore.QTimer.singleShot(
-                        0,
-                        lambda pos=release_position: self._send_shift_click(
-                            pos
-                        ),
-                    )
                     return True
 
                 return False
 
-            def _send_shift_click(self, position):
+            def _preview_is_due(self, position) -> bool:
+                if position == self.last_preview_position:
+                    return False
+                now = time.monotonic()
+                if now - self.last_preview_time < _PREVIEW_INTERVAL_SECONDS:
+                    return False
+                return True
+
+            def _send_range_preview(self, position) -> None:
+                self._send_click(position, shift_modifier)
+                self.last_preview_position = QtCore.QPoint(position)
+                self.last_preview_time = time.monotonic()
+                if selection_pruner is not None:
+                    try:
+                        selection_pruner()
+                    except Exception:
+                        pass
+
+            def _send_click(self, position, modifiers) -> None:
                 self.sending_synthetic_click = True
                 try:
                     QtTest.QTest.mouseClick(
                         self.widget,
                         left_button,
-                        shift_modifier,
+                        modifiers,
                         position,
                     )
                 finally:
                     self.sending_synthetic_click = False
 
-            def _reset(self):
+            def _reset(self) -> None:
                 self.press_position = None
+                self.last_preview_position = None
+                self.last_preview_time = 0.0
                 self.dragging = False
+                self.active = False
 
         _WIDGET = widget
         _FILTER = JointDragSelectionFilter(widget)
