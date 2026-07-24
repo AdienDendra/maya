@@ -10,6 +10,15 @@ _MODE = None
 _ORIGINALS = {}
 _REFRESH_QUEUED = False
 
+_PATCH_NAMES = (
+    "request_refresh",
+    "_ensure_preview",
+    "_update_preview_colors",
+    "_cleanup_preview",
+    "_preview_color_set_exists",
+    "_make_preview_current",
+)
+
 
 def prepare(skin_weight_mode_module) -> None:
     """Patch only the visual storage layer before the UI installs callbacks."""
@@ -21,26 +30,11 @@ def prepare(skin_weight_mode_module) -> None:
         return
 
     _ORIGINALS.clear()
-    for name in (
-        "request_refresh",
-        "_ensure_preview",
-        "_update_preview_colors",
-        "_cleanup_preview",
-        "_preview_color_set_exists",
-        "_make_preview_current",
-    ):
+    for name in _PATCH_NAMES:
         _ORIGINALS[name] = getattr(skin_weight_mode_module, name)
 
-    skin_weight_mode_module.request_refresh = request_refresh
-    skin_weight_mode_module._ensure_preview = _ensure_preview
-    skin_weight_mode_module._update_preview_colors = _update_preview_colors
-    skin_weight_mode_module._cleanup_preview = _cleanup_preview
-    skin_weight_mode_module._preview_color_set_exists = (
-        skin_weight_color_session.exists
-    )
-    skin_weight_mode_module._make_preview_current = (
-        skin_weight_color_session.make_current
-    )
+    for name, replacement in _patches().items():
+        setattr(skin_weight_mode_module, name, replacement)
 
 
 def shutdown() -> None:
@@ -51,15 +45,7 @@ def shutdown() -> None:
     skin_weight_color_session.cleanup()
     if _MODE is not None:
         _MODE._PREVIEW = None
-        replacements = {
-            "request_refresh": request_refresh,
-            "_ensure_preview": _ensure_preview,
-            "_update_preview_colors": _update_preview_colors,
-            "_cleanup_preview": _cleanup_preview,
-            "_preview_color_set_exists": skin_weight_color_session.exists,
-            "_make_preview_current": skin_weight_color_session.make_current,
-        }
-        for name, replacement in replacements.items():
+        for name, replacement in _patches().items():
             original = _ORIGINALS.get(name)
             if original is not None and getattr(_MODE, name, None) is replacement:
                 setattr(_MODE, name, original)
@@ -134,3 +120,16 @@ def _cleanup_preview():
     skin_weight_color_session.cleanup()
     if _MODE is not None:
         _MODE._PREVIEW = None
+
+
+def _patches():
+    """Return the runtime patch map from one canonical definition."""
+
+    return {
+        "request_refresh": request_refresh,
+        "_ensure_preview": _ensure_preview,
+        "_update_preview_colors": _update_preview_colors,
+        "_cleanup_preview": _cleanup_preview,
+        "_preview_color_set_exists": skin_weight_color_session.exists,
+        "_make_preview_current": skin_weight_color_session.make_current,
+    }
