@@ -105,6 +105,7 @@ def reload_modules():
 
     import ad_skin_tools.ui.qt_helpers as qt_helpers
     import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
+    import ad_skin_tools.ui.skin_weight_proxy_shape as skin_weight_proxy_shape
     import ad_skin_tools.ui.skin_weight_visual_proxy as skin_weight_visual_proxy
     import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
@@ -167,6 +168,7 @@ def reload_modules():
             add_influence,
             qt_helpers,
             skin_weight_ramps,
+            skin_weight_proxy_shape,
             skin_weight_visual_proxy,
             smoothing_controls,
             joint_list,
