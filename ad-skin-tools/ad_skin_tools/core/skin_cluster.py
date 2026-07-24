@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
@@ -32,6 +32,7 @@ class SkinClusterAdapter:
     - find skinCluster
     - read influence list
     - read weight matrix
+    - query affected components per influence
     - write weight matrix
     """
 
@@ -78,6 +79,54 @@ class SkinClusterAdapter:
             influences=self.influences(),
             weights=weights,
         )
+
+    def affected_vertex_ids(self, influences: Iterable[str]) -> np.ndarray:
+        """Return the union of non-zero loaded-mesh vertices for influences.
+
+        ``MFnSkinCluster.getPointsAffectedByInfluence`` queries only affected
+        components for each requested influence; it does not read the complete
+        vertex-by-influence weight matrix.
+        """
+
+        influence_paths = {
+            path.fullPathName(): path
+            for path in self.skin_fn.influenceObjects()
+        }
+        mesh_path = self.mesh_dag_path.fullPathName()
+        affected = set()
+
+        for influence in influences:
+            influence_path = influence_paths.get(str(influence))
+            if influence_path is None:
+                continue
+
+            selection, _weights = self.skin_fn.getPointsAffectedByInfluence(
+                influence_path
+            )
+            for index in range(selection.length()):
+                try:
+                    dag_path, component = selection.getComponent(index)
+                except (RuntimeError, TypeError):
+                    continue
+
+                if component.isNull():
+                    continue
+
+                try:
+                    if dag_path.node().hasFn(om.MFn.kTransform):
+                        dag_path.extendToShape()
+                except RuntimeError:
+                    continue
+
+                if dag_path.fullPathName() != mesh_path:
+                    continue
+                if not component.hasFn(om.MFn.kMeshVertComponent):
+                    continue
+
+                component_fn = om.MFnSingleIndexedComponent(component)
+                affected.update(int(value) for value in component_fn.getElements())
+
+        return np.asarray(sorted(affected), dtype=np.int32)
 
     def set_weights(
         self,
@@ -139,6 +188,7 @@ def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
 def has_skin_cluster(mesh_shape: str) -> bool:
     return find_skin_cluster(mesh_shape, required=False) is not None
 
+
 def create_closest_skin_cluster(
     mesh_shape: str,
     mesh_transform: str,
@@ -151,7 +201,6 @@ def create_closest_skin_cluster(
     Maya may generate temporary initial weights while creating the
     skinCluster, but commands.bind_object_closest() will replace every
     vertex row using weights calculated by segment_solver.
-
     The solver itself enforces the maximum influence count. Maya's
     automatic max-influence enforcement remains disabled so Maya does
     not alter the custom weight matrix.
@@ -232,7 +281,8 @@ def create_closest_skin_cluster(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
-           
+
+
 def _get_depend_node(node_name: str) -> om.MObject:
     selection = om.MSelectionList()
     selection.add(node_name)
