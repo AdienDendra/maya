@@ -118,10 +118,34 @@ def clear_global_owner() -> None:
         _TOOL_WINDOW._show_error(exc)
 
 
+def select_all_pending_joints() -> None:
+    """Select every pending row, regardless of the current list selection."""
+
+    try:
+        _TOOL_WINDOW._require_not_busy()
+        _TOOL_WINDOW._require_loaded_mesh()
+
+        joints = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+        bound = set(_TOOL_WINDOW._STATE.get("bound_joint_paths", set()))
+        pending = [joint for joint in joints if joint not in bound]
+        if not pending:
+            cmds.warning("No pending joints are available in the list.")
+            return
+
+        _JOINT_LIST.select_joint_paths(pending)
+        _TOOL_WINDOW._info(
+            "Selected all {} pending joint(s) in the list.".format(len(pending))
+        )
+    except Exception as exc:
+        _TOOL_WINDOW._show_error(exc)
+
+
 def _populate_joint_context_menu(menu, *args) -> None:
-    """Append Global Owner actions and disable them after Bind Skin."""
+    """Insert pending selection, then append Global Owner actions."""
 
     _ORIGINAL_POPULATE_CONTEXT_MENU(menu, *args)
+    _insert_select_all_pending(menu)
+
     editable = _global_owner_is_editable()
     cmds.menuItem(divider=True, parent=menu)
     cmds.menuItem(
@@ -136,6 +160,38 @@ def _populate_joint_context_menu(menu, *args) -> None:
         enable=bool(editable and global_owner_joint()),
         command=lambda *_: clear_global_owner(),
     )
+
+
+def _insert_select_all_pending(menu) -> None:
+    """Insert immediately after Select Vertices when Maya supports insertion."""
+
+    insert_after = None
+    try:
+        items = cmds.popupMenu(menu, query=True, itemArray=True) or []
+        for item in items:
+            try:
+                label = cmds.menuItem(item, query=True, label=True)
+            except Exception:
+                continue
+            if label == "Select Vertices":
+                insert_after = item
+                break
+    except Exception:
+        insert_after = None
+
+    kwargs = {
+        "label": "Select All Pending Joints",
+        "parent": menu,
+        "command": lambda *_: select_all_pending_joints(),
+    }
+    if insert_after:
+        kwargs["insertAfter"] = insert_after
+
+    try:
+        cmds.menuItem(**kwargs)
+    except Exception:
+        kwargs.pop("insertAfter", None)
+        cmds.menuItem(**kwargs)
 
 
 def _global_owner_is_editable() -> bool:
