@@ -4,6 +4,7 @@ import maya.cmds as cmds
 
 
 CTRL_LISTED_JOINTS_VALUE = "adSkin_listedJointCountValue"
+_CONTEXT_ROW_HEIGHT = 22
 
 _TOOL_WINDOW = None
 _SKIN_OPERATIONS = None
@@ -82,23 +83,25 @@ def _build_skin_cluster_section() -> None:
         marginWidth=6,
         marginHeight=6,
     )
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=1)
 
     _TOOL_WINDOW._label_control_row(
-        "Skin Cluster",
+        "Skin Cluster:",
         lambda: cmds.textField(
             _TOOL_WINDOW.CTRL_SKIN_MENU,
             text="<no skinCluster>",
             editable=False,
         ),
+        height=_CONTEXT_ROW_HEIGHT,
     )
     _TOOL_WINDOW._label_control_row(
-        "Loaded Mesh",
+        "Loaded Mesh:",
         lambda: cmds.text(
             _TOOL_WINDOW.CTRL_MESH_LABEL,
             label="<none>",
             align="left",
         ),
+        height=_CONTEXT_ROW_HEIGHT,
     )
     cmds.text(
         _TOOL_WINDOW.CTRL_MODE_LABEL,
@@ -107,12 +110,13 @@ def _build_skin_cluster_section() -> None:
         manage=False,
     )
     _TOOL_WINDOW._label_control_row(
-        "Listed Joints",
+        "Listed Joints:",
         lambda: cmds.text(
             CTRL_LISTED_JOINTS_VALUE,
             label="0",
             align="left",
         ),
+        height=_CONTEXT_ROW_HEIGHT,
     )
 
     # Skin Weight Visual uses CTRL_JOINT_LABEL as its insertion anchor. Keep a
