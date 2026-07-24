@@ -2,7 +2,7 @@
 
 The controls in this module are intentionally presentation-only:
 
-- alphabetical sorting changes only the rendered row order;
+- sorting changes only the rendered row order;
 - Search hides rows without deleting joints or changing selection;
 - Pin shows only the currently selected visible joint rows.
 """
@@ -13,6 +13,7 @@ import maya.cmds as cmds
 from maya import OpenMayaUI as omui
 
 from ad_skin_tools.core.compat import import_qt_modules
+from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
 
 
 _CONTROLS_OBJECT_NAME = "adSkinJointPresentationControls"
@@ -28,6 +29,7 @@ _STATE_REFRESH_KEY = "joint_presentation_refresh"
 
 SORT_A_TO_Z = "a_to_z"
 SORT_Z_TO_A = "z_to_a"
+SORT_PENDING_JOINTS = "pending_joints"
 
 _TOOL_WINDOW = None
 _CONTROL_NAME = None
@@ -36,6 +38,7 @@ _FIELD = None
 _PIN_BUTTON = None
 _SORT_A_TO_Z_BUTTON = None
 _SORT_Z_TO_A_BUTTON = None
+_SORT_PENDING_BUTTON = None
 
 
 def install(tool_window_module) -> bool:
@@ -52,6 +55,7 @@ def install(tool_window_module) -> bool:
     global _PIN_BUTTON
     global _SORT_A_TO_Z_BUTTON
     global _SORT_Z_TO_A_BUTTON
+    global _SORT_PENDING_BUTTON
 
     _TOOL_WINDOW = tool_window_module
     _CONTROL_NAME = tool_window_module.CTRL_JOINT_LIST
@@ -63,6 +67,10 @@ def install(tool_window_module) -> bool:
     state.setdefault(_STATE_PIN_ENABLED_KEY, False)
     state.setdefault(_STATE_PIN_PATHS_KEY, set())
     state[_STATE_REFRESH_KEY] = apply_filter
+
+    from ad_skin_tools.ui import joint_list
+
+    joint_list._sorted_display_order = _sorted_display_order
 
     try:
         QtWidgets, QtGui, _QtCore, binding_name = import_qt_modules()
@@ -96,8 +104,10 @@ def install(tool_window_module) -> bool:
 
         sort_a_to_z = QtWidgets.QRadioButton("A to Z", sort_row)
         sort_z_to_a = QtWidgets.QRadioButton("Z to A", sort_row)
+        sort_pending = QtWidgets.QRadioButton("Pending Joints", sort_row)
         sort_layout.addWidget(sort_a_to_z)
         sort_layout.addWidget(sort_z_to_a)
+        sort_layout.addWidget(sort_pending)
         sort_layout.addStretch(1)
         controls_layout.addWidget(sort_row)
 
@@ -124,11 +134,6 @@ def install(tool_window_module) -> bool:
         search_layout.addWidget(pin_button)
         controls_layout.addWidget(search_row)
 
-        sort_mode = state.get(_STATE_SORT_KEY, SORT_A_TO_Z)
-        sort_a_to_z.setChecked(sort_mode != SORT_Z_TO_A)
-        sort_z_to_a.setChecked(sort_mode == SORT_Z_TO_A)
-        pin_button.setChecked(bool(state.get(_STATE_PIN_ENABLED_KEY, False)))
-
         field.textChanged.connect(_on_text_changed)
         pin_button.toggled.connect(_on_pin_toggled)
         sort_a_to_z.clicked.connect(
@@ -136,6 +141,9 @@ def install(tool_window_module) -> bool:
         )
         sort_z_to_a.clicked.connect(
             lambda *_: _set_sort_mode(SORT_Z_TO_A)
+        )
+        sort_pending.clicked.connect(
+            lambda *_: _set_sort_mode(SORT_PENDING_JOINTS)
         )
 
         layout.insertWidget(tree_index, controls)
@@ -145,7 +153,10 @@ def install(tool_window_module) -> bool:
         _PIN_BUTTON = pin_button
         _SORT_A_TO_Z_BUTTON = sort_a_to_z
         _SORT_Z_TO_A_BUTTON = sort_z_to_a
+        _SORT_PENDING_BUTTON = sort_pending
 
+        _set_sort_buttons(state.get(_STATE_SORT_KEY, SORT_A_TO_Z))
+        pin_button.setChecked(bool(state.get(_STATE_PIN_ENABLED_KEY, False)))
         apply_filter()
         return True
     except Exception:
@@ -154,6 +165,7 @@ def install(tool_window_module) -> bool:
         _PIN_BUTTON = None
         _SORT_A_TO_Z_BUTTON = None
         _SORT_Z_TO_A_BUTTON = None
+        _SORT_PENDING_BUTTON = None
         return False
 
 
@@ -209,6 +221,7 @@ def apply_filter(text=None) -> None:
             hidden.add(item_id)
 
     state[_STATE_HIDDEN_KEY] = hidden
+    _update_pending_sort_availability()
 
 
 def prune_hidden_selection() -> None:
@@ -268,7 +281,11 @@ def _on_pin_toggled(enabled) -> None:
 def _set_sort_mode(mode: str) -> None:
     if _TOOL_WINDOW is None:
         return
-    if mode not in {SORT_A_TO_Z, SORT_Z_TO_A}:
+    if mode not in {SORT_A_TO_Z, SORT_Z_TO_A, SORT_PENDING_JOINTS}:
+        return
+    if mode == SORT_PENDING_JOINTS and not _pending_joint_paths():
+        cmds.warning("No pending joints are available in the list.")
+        _set_sort_buttons(_TOOL_WINDOW._STATE.get(_STATE_SORT_KEY, SORT_A_TO_Z))
         return
 
     state = _TOOL_WINDOW._STATE
@@ -276,10 +293,95 @@ def _set_sort_mode(mode: str) -> None:
         return
 
     state[_STATE_SORT_KEY] = mode
+    _set_sort_buttons(mode)
     joints = builtins.list(state.get("joints", []))
     set_joint_list = getattr(_TOOL_WINDOW, "_set_joint_list", None)
     if callable(set_joint_list):
         set_joint_list(joints)
+
+
+def _sorted_display_order(joints, display_labels):
+    """Return presentation order without rewriting authoritative joint order."""
+
+    mode = _TOOL_WINDOW._STATE.get(_STATE_SORT_KEY, SORT_A_TO_Z)
+    key = lambda joint: (
+        str(display_labels[joint]).casefold(),
+        str(joint).casefold(),
+    )
+
+    if mode == SORT_Z_TO_A:
+        return sorted(joints, key=key, reverse=True)
+
+    if mode == SORT_PENDING_JOINTS:
+        bound = _current_bound_paths()
+        pending = {joint for joint in joints if joint not in bound}
+        if pending:
+            return sorted(
+                joints,
+                key=lambda joint: (
+                    0 if joint in pending else 1,
+                    str(display_labels[joint]).casefold(),
+                    str(joint).casefold(),
+                ),
+            )
+
+        _TOOL_WINDOW._STATE[_STATE_SORT_KEY] = SORT_A_TO_Z
+        _set_sort_buttons(SORT_A_TO_Z)
+
+    return sorted(joints, key=key)
+
+
+def _current_bound_paths():
+    state = _TOOL_WINDOW._STATE
+    if state.get("has_skin_cluster") and state.get("mesh_shape"):
+        try:
+            bound = set(
+                SkinClusterAdapter.from_mesh(state["mesh_shape"]).influences()
+            )
+            state["bound_joint_paths"] = bound
+            return bound
+        except Exception:
+            pass
+    return set(state.get("bound_joint_paths", set()))
+
+
+def _pending_joint_paths():
+    if _TOOL_WINDOW is None:
+        return []
+    state = _TOOL_WINDOW._STATE
+    bound = set(state.get("bound_joint_paths", set()))
+    return [joint for joint in state.get("joints", []) if joint not in bound]
+
+
+def _update_pending_sort_availability() -> None:
+    has_pending = bool(_pending_joint_paths())
+    if _SORT_PENDING_BUTTON is not None:
+        try:
+            _SORT_PENDING_BUTTON.setEnabled(has_pending)
+        except Exception:
+            pass
+
+    state = _TOOL_WINDOW._STATE
+    if not has_pending and state.get(_STATE_SORT_KEY) == SORT_PENDING_JOINTS:
+        state[_STATE_SORT_KEY] = SORT_A_TO_Z
+        _set_sort_buttons(SORT_A_TO_Z)
+
+
+def _set_sort_buttons(mode: str) -> None:
+    buttons = (
+        (_SORT_A_TO_Z_BUTTON, mode == SORT_A_TO_Z),
+        (_SORT_Z_TO_A_BUTTON, mode == SORT_Z_TO_A),
+        (_SORT_PENDING_BUTTON, mode == SORT_PENDING_JOINTS),
+    )
+    for button, checked in buttons:
+        if button is None:
+            continue
+        try:
+            blocked = button.blockSignals(True)
+            button.setChecked(bool(checked))
+            button.blockSignals(blocked)
+        except Exception:
+            pass
 
 
 def _selected_visible_joint_paths():
@@ -354,7 +456,6 @@ def _remove_existing_controls(container, layout, QtWidgets) -> None:
         existing.hide()
         existing.deleteLater()
 
-    # Remove the standalone v13.1 Search field when reloading into v13.2.
     legacy_field = container.findChild(
         QtWidgets.QLineEdit,
         _FIELD_OBJECT_NAME,
