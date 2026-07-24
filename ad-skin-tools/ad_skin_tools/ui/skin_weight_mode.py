@@ -305,7 +305,8 @@ def _update_preview_colors(mesh_shape, joint, mode):
     mesh_fn.setVertexColors(
         colors,
         vertex_ids,
-        _PREVIEW["color_set"],
+        None,
+        om.MFnMesh.kRGB,
     )
     _enable_color_display(_PREVIEW["mesh_transform"])
     cmds.refresh(force=True)
@@ -687,8 +688,10 @@ def _current_color_set(mesh_transform):
         mesh_transform,
         query=True,
         currentColorSet=True,
-    ) or []
-    return result[0] if result else None
+    )
+    if isinstance(result, (list, tuple)):
+        return result[0] if result else None
+    return str(result) if result else None
 
 
 def _unique_color_set_name(existing_sets):
