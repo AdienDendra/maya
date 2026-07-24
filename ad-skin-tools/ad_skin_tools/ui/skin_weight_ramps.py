@@ -1,4 +1,4 @@
-"""Single source of truth for Skin Weight Mode names, ramps, and tooltips."""
+"""Single source of truth for Skin Weight Visual names, ramps, and tooltips."""
 
 MODE_OFF = "off"
 MODE_HEAT = "heat"
@@ -6,8 +6,8 @@ MODE_SPECTRUM = "spectrum"
 MODE_GRAYSCALE = "grayscale"
 
 RAMP_MODES = (
-    MODE_HEAT,
     MODE_SPECTRUM,
+    MODE_HEAT,
     MODE_GRAYSCALE,
 )
 VALID_MODES = frozenset((MODE_OFF,) + RAMP_MODES)
@@ -38,23 +38,25 @@ RAMPS = {
 
 MODE_TOOLTIPS = {
     MODE_OFF: "Off — normal mesh shading",
-    MODE_HEAT: "Black / Red / Orange / Yellow / White",
     MODE_SPECTRUM: "Black / Blue / Green / Yellow / Orange / Red / White",
+    MODE_HEAT: "Black / Red / Orange / Yellow / White",
     MODE_GRAYSCALE: "Black / Grey / White",
 }
 
 MODE_ORDER = (
     MODE_OFF,
-    MODE_HEAT,
     MODE_SPECTRUM,
+    MODE_HEAT,
     MODE_GRAYSCALE,
 )
 
 
 def ramp_for(mode):
-    """Return the immutable ramp points for a visual mode."""
+    """Return the immutable ramp points for a visual preset."""
 
     try:
         return RAMPS[mode]
     except KeyError as exc:
-        raise ValueError("Unsupported Skin Weight Mode: {}".format(mode)) from exc
+        raise ValueError(
+            "Unsupported Skin Weight Visual preset: {}".format(mode)
+        ) from exc
