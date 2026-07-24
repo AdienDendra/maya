@@ -21,7 +21,6 @@ _REFRESH_KEY = "skin_weight_mode_refresh"
 _CONTROLS_NAME = "adSkinWeightModeControls"
 _COLOR_SET_BASE = "__adSkinWeightPreview__"
 
-# Exact user-defined RGB points over the normalized 0..1 weight range.
 _RAMPS = {
     MODE_HEAT: (
         (0.00, (0.0, 0.0, 0.0)),
@@ -59,8 +58,7 @@ _CLEANING_UP = False
 def install(tool_window_module, joint_list_module):
     """Install Skin Weight Mode after the workspace has been built."""
 
-    global _TOOL_WINDOW
-    global _JOINT_LIST
+    global _TOOL_WINDOW, _JOINT_LIST
 
     _TOOL_WINDOW = tool_window_module
     _JOINT_LIST = joint_list_module
@@ -80,17 +78,12 @@ def install(tool_window_module, joint_list_module):
 
 
 def shutdown(*_):
-    """Remove temporary color data and all persistent callbacks."""
+    """Remove temporary color data and persistent callbacks."""
 
-    global _CONTROLS
-    global _BUTTONS
-    global _BUTTON_GROUP
-    global _CONNECTED_BUTTONS
-    global _SCRIPT_JOBS
-    global _SCENE_CALLBACKS
-    global _REFRESH_QUEUED
+    global _CONTROLS, _BUTTONS, _BUTTON_GROUP, _CONNECTED_BUTTONS
+    global _SCRIPT_JOBS, _SCENE_CALLBACKS, _REFRESH_QUEUED
 
-    _deactivate(show_message=False)
+    _deactivate()
 
     for job in list(_SCRIPT_JOBS):
         try:
@@ -115,18 +108,15 @@ def shutdown(*_):
 
 
 def set_mode(mode):
-    """Activate a color preset or restore normal mesh display."""
+    """Activate one visual preset or restore normal mesh display."""
 
-    if _TOOL_WINDOW is None or mode not in {
-        MODE_OFF,
-        MODE_HEAT,
-        MODE_SPECTRUM,
-        MODE_GRAYSCALE,
-    }:
+    if _TOOL_WINDOW is None:
+        return
+    if mode not in {MODE_OFF, MODE_HEAT, MODE_SPECTRUM, MODE_GRAYSCALE}:
         return
 
     if mode == MODE_OFF:
-        _deactivate(show_message=False)
+        _deactivate()
         return
 
     previous_mode = _TOOL_WINDOW._STATE.get(_MODE_KEY, MODE_OFF)
@@ -135,7 +125,7 @@ def set_mode(mode):
         _activate(mode, joint)
     except Exception as exc:
         if previous_mode == MODE_OFF:
-            _deactivate(show_message=False)
+            _deactivate()
         else:
             _set_button_state(previous_mode)
         _TOOL_WINDOW._show_error(exc)
@@ -151,6 +141,7 @@ def _activate(mode, joint):
         raise RuntimeError(
             "Skin Weight Mode requires a loaded mesh with an existing skinCluster."
         )
+
     for node in (mesh_shape, mesh_transform, skin_cluster, joint):
         if not cmds.objExists(node):
             raise RuntimeError(
@@ -166,7 +157,7 @@ def _activate(mode, joint):
 
 
 def request_refresh(*_):
-    """Coalesce UI and weight-operation changes into one viewport refresh."""
+    """Coalesce weight and selection changes into one viewport refresh."""
 
     global _REFRESH_QUEUED
 
@@ -193,7 +184,7 @@ def _deferred_refresh():
 
 
 def refresh(*_):
-    """Read the latest skinCluster weight column and repaint the preview set."""
+    """Read the latest influence weights and repaint the preview."""
 
     if _TOOL_WINDOW is None:
         return
@@ -209,13 +200,13 @@ def refresh(*_):
     bound = set(state.get("bound_joint_paths", set()))
 
     if not all((mesh_shape, mesh_transform, joint)):
-        _deactivate(show_message=False)
+        _deactivate()
         return
     if joint not in bound:
-        _deactivate(show_message=False)
+        _deactivate()
         return
     if not all(cmds.objExists(node) for node in (mesh_shape, mesh_transform, joint)):
-        _deactivate(show_message=False)
+        _deactivate()
         return
 
     try:
@@ -248,7 +239,6 @@ def _ensure_preview(mesh_shape, mesh_transform):
     )
     previous_set = _current_color_set(mesh_transform)
     color_set = _unique_color_set_name(existing_sets)
-    display_snapshot = _query_display_options(mesh_transform)
 
     cmds.polyColorSet(
         mesh_transform,
@@ -268,7 +258,7 @@ def _ensure_preview(mesh_shape, mesh_transform):
         "mesh_transform": mesh_transform,
         "color_set": color_set,
         "previous_color_set": previous_set,
-        "display_options": display_snapshot,
+        "display_options": _query_display_options(mesh_transform),
     }
     _enable_color_display(mesh_transform)
 
@@ -302,37 +292,45 @@ def _update_preview_colors(mesh_shape, joint, mode):
         vertex_ids[index] = index
 
     _make_preview_current()
-    mesh_fn.setVertexColors(
-        colors,
-        vertex_ids,
-        None,
-        om.MFnMesh.kRGB,
-    )
+
+    # Maya 2025 rejects an explicit None for the optional MDGModifier.
+    # Omitting optional arguments applies immediately to the current color set.
+    mesh_fn.setVertexColors(colors, vertex_ids)
+
     _enable_color_display(_PREVIEW["mesh_transform"])
     cmds.refresh(force=True)
 
 
 def _map_weights_to_rgb(weights, mode):
-    weights = np.clip(
+    values = np.clip(
         np.asarray(weights, dtype=np.float64).reshape(-1),
         0.0,
         1.0,
     )
     ramp = _RAMPS[mode]
-    positions = np.asarray([entry[0] for entry in ramp], dtype=np.float64)
-    colors = np.asarray([entry[1] for entry in ramp], dtype=np.float64)
+    positions = np.asarray([point[0] for point in ramp], dtype=np.float64)
+    colors = np.asarray([point[1] for point in ramp], dtype=np.float64)
 
     return np.column_stack(
         [
-            np.interp(weights, positions, colors[:, channel])
+            np.interp(values, positions, colors[:, channel])
             for channel in range(3)
         ]
     )
 
 
+def _deactivate():
+    if _TOOL_WINDOW is not None:
+        state = _TOOL_WINDOW._STATE
+        state[_MODE_KEY] = MODE_OFF
+        state[_PREVIEW_KEY] = None
+
+    _set_button_state(MODE_OFF)
+    _cleanup_preview()
+
+
 def _cleanup_preview():
-    global _PREVIEW
-    global _CLEANING_UP
+    global _PREVIEW, _CLEANING_UP
 
     if _PREVIEW is None or _CLEANING_UP:
         return
@@ -343,7 +341,6 @@ def _cleanup_preview():
 
     try:
         mesh_transform = preview.get("mesh_transform")
-        color_set = preview.get("color_set")
         if not mesh_transform or not cmds.objExists(mesh_transform):
             return
 
@@ -355,6 +352,7 @@ def _cleanup_preview():
             ) or []
         )
         previous_set = preview.get("previous_color_set")
+        preview_set = preview.get("color_set")
 
         if previous_set and previous_set in all_sets:
             try:
@@ -366,12 +364,12 @@ def _cleanup_preview():
             except Exception:
                 pass
 
-        if color_set and color_set in all_sets:
+        if preview_set and preview_set in all_sets:
             try:
                 cmds.polyColorSet(
                     mesh_transform,
                     delete=True,
-                    colorSet=color_set,
+                    colorSet=preview_set,
                 )
             except Exception:
                 pass
@@ -383,19 +381,6 @@ def _cleanup_preview():
         cmds.refresh(force=True)
     finally:
         _CLEANING_UP = False
-
-
-def _deactivate(show_message=False):
-    if _TOOL_WINDOW is not None:
-        state = _TOOL_WINDOW._STATE
-        state[_MODE_KEY] = MODE_OFF
-        state[_PREVIEW_KEY] = None
-
-    _set_button_state(MODE_OFF)
-    _cleanup_preview()
-
-    if show_message and _TOOL_WINDOW is not None:
-        _TOOL_WINDOW._info("Skin Weight Mode deactivated.")
 
 
 def _require_single_selected_bound_joint():
@@ -423,10 +408,7 @@ def _require_single_selected_bound_joint():
 
 
 def _install_controls():
-    global _QT
-    global _CONTROLS
-    global _BUTTONS
-    global _BUTTON_GROUP
+    global _QT, _CONTROLS, _BUTTONS, _BUTTON_GROUP
 
     try:
         QtWidgets, QtGui, QtCore, binding = import_qt_modules()
@@ -457,6 +439,7 @@ def _install_controls():
         group = QtWidgets.QButtonGroup(controls)
         group.setExclusive(True)
         buttons = {}
+
         definitions = (
             (MODE_OFF, "Off — normal mesh shading"),
             (MODE_HEAT, "Black / Red / Yellow"),
@@ -537,14 +520,13 @@ def _connect_operation_buttons():
 
     QtWidgets, _QtGui, _QtCore, binding = _QT
     connected = []
-    operation_names = (
+
+    for name in (
         _TOOL_WINDOW.CTRL_BIND_BUTTON,
         "adSkin_addInfluenceButton",
         "adSkin_floodSelectedToJointButton",
         "adSkin_smoothSelectedComponentsButton",
-    )
-
-    for name in operation_names:
+    ):
         pointer = omui.MQtUtil.findControl(name)
         if not pointer:
             continue
@@ -562,9 +544,7 @@ def _connect_operation_buttons():
             container, _layout, _index = _managing_layout(label)
             for button in container.findChildren(QtWidgets.QPushButton):
                 if button.text() == "Load Mesh":
-                    button.clicked.connect(
-                        lambda *_: _deactivate(show_message=False)
-                    )
+                    button.clicked.connect(lambda *_: _deactivate())
                     connected.append(button)
                     break
         except Exception:
@@ -623,12 +603,11 @@ def _install_scene_callbacks():
             pass
 
     _SCENE_CALLBACKS = []
-    messages = (
+    for message in (
         om.MSceneMessage.kBeforeNew,
         om.MSceneMessage.kBeforeOpen,
         om.MSceneMessage.kBeforeSave,
-    )
-    for message in messages:
+    ):
         try:
             _SCENE_CALLBACKS.append(
                 om.MSceneMessage.addCallback(message, _before_scene_change)
@@ -638,7 +617,7 @@ def _install_scene_callbacks():
 
 
 def _before_scene_change(*_):
-    _deactivate(show_message=False)
+    _deactivate()
 
 
 def _tool_changed(*_):
@@ -647,11 +626,8 @@ def _tool_changed(*_):
     if _TOOL_WINDOW._STATE.get(_MODE_KEY, MODE_OFF) == MODE_OFF:
         return
 
-    context = _current_context()
-    if _is_skin_paint_context(context):
-        # Native Maya Paint Skin Weights always wins. AD preview is removed and
-        # remains Off until the user explicitly chooses a preset again.
-        _deactivate(show_message=False)
+    if _is_skin_paint_context(_current_context()):
+        _deactivate()
 
 
 def _preview_color_set_exists():
@@ -706,13 +682,11 @@ def _unique_color_set_name(existing_sets):
 
 def _query_display_options(mesh_transform):
     result = {}
-    queries = (
+    for flag, value in (
         ("colorShadedDisplay", True),
         ("colorMaterialChannel", True),
         ("materialBlend", True),
-    )
-
-    for flag, value in queries:
+    ):
         try:
             result[flag] = cmds.polyOptions(
                 mesh_transform,
@@ -721,7 +695,6 @@ def _query_display_options(mesh_transform):
             )
         except Exception:
             pass
-
     return result
 
 
@@ -747,13 +720,11 @@ def _restore_display_options(mesh_transform, options):
         if value is not None:
             kwargs[flag] = value
 
-    if not kwargs:
-        return
-
-    try:
-        cmds.polyOptions(mesh_transform, **kwargs)
-    except Exception:
-        pass
+    if kwargs:
+        try:
+            cmds.polyOptions(mesh_transform, **kwargs)
+        except Exception:
+            pass
 
 
 def _is_skin_paint_context(context):
@@ -783,9 +754,9 @@ def _current_context():
 def _set_button_state(mode):
     for value, button in _BUTTONS.items():
         try:
-            blocked = button.blockSignals(True)
+            previous = button.blockSignals(True)
             button.setChecked(value == mode)
-            button.blockSignals(blocked)
+            button.blockSignals(previous)
         except Exception:
             pass
 
@@ -813,7 +784,10 @@ def _icon(mode, QtGui, QtCore):
                 0,
             )
             for position, rgb in _RAMPS[mode]:
-                gradient.setColorAt(position, QtGui.QColor.fromRgbF(*rgb))
+                gradient.setColorAt(
+                    position,
+                    QtGui.QColor.fromRgbF(*rgb),
+                )
             painter.fillRect(rect, gradient)
 
         painter.setPen(QtGui.QPen(QtGui.QColor(30, 30, 30), 1.0))
