@@ -256,8 +256,10 @@ def create_closest_skin_cluster(
             "Segment Weighted Bind requires at least two joints."
         )
 
+    skin_cluster_name = _next_available_skin_cluster_name(mesh_transform)
     created = cmds.skinCluster(
         *(normalized_joints + [mesh_transform]),
+        name=skin_cluster_name,
         toSelectedBones=True,
         bindMethod=0,
         skinMethod=0,
@@ -281,6 +283,18 @@ def create_closest_skin_cluster(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
+
+
+def _next_available_skin_cluster_name(mesh_transform: str) -> str:
+    mesh_name = str(mesh_transform).rsplit("|", 1)[-1]
+    base_name = "{}_adSc".format(mesh_name)
+    if not cmds.objExists(base_name):
+        return base_name
+
+    index = 1
+    while cmds.objExists("{}{}".format(base_name, index)):
+        index += 1
+    return "{}{}".format(base_name, index)
 
 
 def _get_depend_node(node_name: str) -> om.MObject:
