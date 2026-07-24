@@ -14,6 +14,7 @@ import builtins
 
 import maya.cmds as cmds
 
+from ad_skin_tools.core.compat import import_qt_modules
 from ad_skin_tools.core.influence_lock import (
     is_influence_locked,
     set_influence_locked,
@@ -40,6 +41,8 @@ _UNLOCKED_ICON_CANDIDATES = (
 _TOOL_WINDOW = None
 _ICON_CACHE = {}
 _PROGRAMMATIC_MULTI_SELECT = False
+_DRAG_SELECTION_FILTER = None
+_DRAG_SELECTION_VIEW = None
 
 
 def configure(tool_window_module) -> None:
@@ -88,6 +91,7 @@ def build_section() -> None:
         button=3,
         postMenuCommand=_populate_joint_context_menu,
     )
+    _install_left_drag_selection()
 
     _TOOL_WINDOW._button_row(
         [
@@ -349,6 +353,53 @@ def remove_selected_joints() -> None:
         _TOOL_WINDOW._show_error(exc)
 
 
+def remove_inverse_selected_joints() -> None:
+    """Remove unselected pending rows while preserving selected and bound rows."""
+
+    try:
+        _TOOL_WINDOW._require_not_busy()
+        _TOOL_WINDOW._require_loaded_mesh()
+        selected = set(selected_joint_paths())
+        if not selected:
+            cmds.warning(
+                "Select the joints to keep before using "
+                "Remove Inverse Selected."
+            )
+            return
+
+        current = builtins.list(_TOOL_WINDOW._STATE.get("joints", []))
+        bound = set(_TOOL_WINDOW._STATE.get("bound_joint_paths", set()))
+        removable = {
+            joint
+            for joint in current
+            if joint not in selected and joint not in bound
+        }
+        if not removable:
+            cmds.warning(
+                "No unselected pending joints to remove. "
+                "Bound influences are preserved."
+            )
+            return
+
+        pending_locks = set(
+            _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
+        )
+        pending_locks.difference_update(removable)
+        _TOOL_WINDOW._STATE["pending_locked_joints"] = pending_locks
+
+        remaining = [joint for joint in current if joint not in removable]
+        set_joint_list(remaining)
+        _TOOL_WINDOW._update_joint_count_label()
+        _TOOL_WINDOW._info(
+            "Removed {} inverse-selected pending joint(s); "
+            "selected joints and bound influences were preserved.".format(
+                len(removable)
+            )
+        )
+    except Exception as exc:
+        _TOOL_WINDOW._show_error(exc)
+
+
 def remove_all_joints() -> None:
     """Clear all pending rows while retaining bound skin influences."""
 
@@ -602,6 +653,11 @@ def _populate_joint_context_menu(menu, *_):
         command=lambda *_: remove_selected_joints(),
     )
     cmds.menuItem(
+        label="Remove Inverse Selected",
+        parent=menu,
+        command=lambda *_: remove_inverse_selected_joints(),
+    )
+    cmds.menuItem(
         label="Remove All",
         parent=menu,
         command=lambda *_: remove_all_joints(),
@@ -667,6 +723,187 @@ def _tree_item_exists(control: str, item_id: str) -> bool:
         )
     except Exception:
         return False
+
+
+def _install_left_drag_selection() -> None:
+    """Install optional plain-left-drag range selection on Maya's Qt tree."""
+
+    global _DRAG_SELECTION_FILTER
+    global _DRAG_SELECTION_VIEW
+
+    try:
+        from maya import OpenMayaUI as omui
+
+        QtWidgets, _QtGui, QtCore, binding_name = import_qt_modules()
+        wrap_instance = _qt_wrap_instance(binding_name)
+        pointer = omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LIST)
+        if not pointer:
+            return
+
+        widget = wrap_instance(int(pointer), QtWidgets.QWidget)
+        view = (
+            widget
+            if isinstance(widget, QtWidgets.QTreeView)
+            else widget.findChild(QtWidgets.QTreeView)
+        )
+        if view is None:
+            return
+
+        if _DRAG_SELECTION_FILTER is not None and _DRAG_SELECTION_VIEW is not None:
+            try:
+                _DRAG_SELECTION_VIEW.viewport().removeEventFilter(
+                    _DRAG_SELECTION_FILTER
+                )
+            except Exception:
+                pass
+
+        event_types = getattr(QtCore.QEvent, "Type", QtCore.QEvent)
+        mouse_buttons = getattr(QtCore.Qt, "MouseButton", QtCore.Qt)
+        keyboard_modifiers = getattr(
+            QtCore.Qt,
+            "KeyboardModifier",
+            QtCore.Qt,
+        )
+        left_button = mouse_buttons.LeftButton
+        no_modifier = keyboard_modifiers.NoModifier
+
+        class JointListDragSelectionFilter(QtCore.QObject):
+            def __init__(self, tree_view):
+                super().__init__(tree_view)
+                self.view = tree_view
+                self.anchor_index = None
+                self.press_position = None
+                self.last_row = None
+                self.dragging = False
+
+            def eventFilter(self, watched, event):
+                event_type = event.type()
+
+                if event_type == event_types.MouseButtonPress:
+                    self._reset()
+                    if event.button() != left_button:
+                        return False
+                    if event.modifiers() != no_modifier:
+                        return False
+
+                    position = _mouse_event_position(event)
+                    index = self.view.indexAt(position)
+                    if not index.isValid():
+                        return False
+
+                    self.anchor_index = index
+                    self.press_position = position
+                    self.last_row = index.row()
+                    return False
+
+                if event_type == event_types.MouseMove:
+                    if self.anchor_index is None:
+                        return False
+                    if event.modifiers() != no_modifier:
+                        self._reset()
+                        return False
+                    if not (event.buttons() & left_button):
+                        self._reset()
+                        return False
+
+                    position = _mouse_event_position(event)
+                    if not self.dragging:
+                        distance = (
+                            position - self.press_position
+                        ).manhattanLength()
+                        if distance < QtWidgets.QApplication.startDragDistance():
+                            return False
+                        self.dragging = True
+
+                    index = self.view.indexAt(position)
+                    if not index.isValid():
+                        return True
+                    if index.row() == self.last_row:
+                        return True
+
+                    paths = _joint_paths_in_view_range(
+                        self.view,
+                        self.anchor_index,
+                        index,
+                    )
+                    if paths:
+                        select_joint_paths(paths)
+                    self.last_row = index.row()
+                    return True
+
+                if event_type == event_types.MouseButtonRelease:
+                    was_dragging = self.dragging
+                    self._reset()
+                    return bool(was_dragging)
+
+                return False
+
+            def _reset(self):
+                self.anchor_index = None
+                self.press_position = None
+                self.last_row = None
+                self.dragging = False
+
+        _DRAG_SELECTION_VIEW = view
+        _DRAG_SELECTION_FILTER = JointListDragSelectionFilter(view)
+        view.viewport().installEventFilter(_DRAG_SELECTION_FILTER)
+    except Exception:
+        _DRAG_SELECTION_FILTER = None
+        _DRAG_SELECTION_VIEW = None
+
+
+def _joint_paths_in_view_range(view, anchor_index, current_index):
+    """Return visible joint paths between two flat-tree model indexes."""
+
+    if anchor_index.parent() != current_index.parent():
+        return []
+
+    parent = anchor_index.parent()
+    first_row, last_row = sorted((anchor_index.row(), current_index.row()))
+    model = view.model()
+    display_to_path = _TOOL_WINDOW._STATE.get("joint_display_to_path", {})
+    item_to_path = _TOOL_WINDOW._STATE.get("joint_item_to_path", {})
+    ordered_paths = builtins.list(item_to_path.values())
+    paths = []
+
+    for row in range(first_row, last_row + 1):
+        try:
+            if view.isRowHidden(row, parent):
+                continue
+        except Exception:
+            pass
+
+        index = model.index(row, 0, parent)
+        if not index.isValid():
+            continue
+
+        value = index.data()
+        label = "" if value is None else str(value)
+        joint = display_to_path.get(label) or item_to_path.get(label)
+        if joint is None and 0 <= row < len(ordered_paths):
+            joint = ordered_paths[row]
+        if joint and joint not in paths:
+            paths.append(joint)
+
+    return paths
+
+
+def _mouse_event_position(event):
+    position = getattr(event, "position", None)
+    if callable(position):
+        return position().toPoint()
+    return event.pos()
+
+
+def _qt_wrap_instance(binding_name):
+    if binding_name == "PySide6":
+        from shiboken6 import wrapInstance
+
+        return wrapInstance
+
+    from shiboken2 import wrapInstance
+
+    return wrapInstance
 
 
 def _require_configured() -> None:
