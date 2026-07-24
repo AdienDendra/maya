@@ -1,45 +1,37 @@
 """Independent, visualization-only skin-weight preview for the loaded mesh."""
 
+from dataclasses import dataclass
+
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 from maya import OpenMayaUI as omui
 
 from ad_skin_tools.core.compat import ensure_numpy, import_qt_modules
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
+from ad_skin_tools.ui import qt_helpers
+from ad_skin_tools.ui.skin_weight_ramps import (
+    MODE_GRAYSCALE,
+    MODE_HEAT,
+    MODE_OFF,
+    MODE_ORDER,
+    MODE_SPECTRUM,
+    MODE_TOOLTIPS,
+    RAMPS,
+    VALID_MODES,
+)
 
 np = ensure_numpy()
-
-
-MODE_OFF = "off"
-MODE_HEAT = "heat"
-MODE_SPECTRUM = "spectrum"
-MODE_GRAYSCALE = "grayscale"
 
 _MODE_KEY = "skin_weight_mode"
 _PREVIEW_KEY = "skin_weight_preview_joint"
 _REFRESH_KEY = "skin_weight_mode_refresh"
 _CONTROLS_NAME = "adSkinWeightModeControls"
 _COLOR_SET_BASE = "__adSkinWeightPreview__"
-
-_RAMPS = {
-    MODE_HEAT: (
-        (0.00, (0.0, 0.0, 0.0)),
-        (0.50, (1.0, 0.0, 0.0)),
-        (1.00, (1.0, 1.0, 0.0)),
-    ),
-    MODE_SPECTRUM: (
-        (0.00, (0.0, 0.0, 1.0)),
-        (0.25, (0.0, 1.0, 0.0)),
-        (0.50, (1.0, 1.0, 0.0)),
-        (0.75, (1.0, 0.5, 0.0)),
-        (1.00, (1.0, 0.0, 0.0)),
-    ),
-    MODE_GRAYSCALE: (
-        (0.00, (0.0, 0.0, 0.0)),
-        (0.50, (0.5, 0.5, 0.5)),
-        (1.00, (1.0, 1.0, 1.0)),
-    ),
-}
+_DISPLAY_FLAGS = (
+    "colorShadedDisplay",
+    "colorMaterialChannel",
+    "materialBlend",
+)
 
 _TOOL_WINDOW = None
 _JOINT_LIST = None
@@ -55,15 +47,23 @@ _REFRESH_QUEUED = False
 _CLEANING_UP = False
 
 
+@dataclass
+class _PreviewSession:
+    mesh_shape: str
+    mesh_transform: str
+    color_set: str
+    previous_color_set: object
+    display_options: dict
+
+
 def install(tool_window_module, joint_list_module):
-    """Install Skin Weight Mode after the workspace has been built."""
+    """Install Skin Weight Mode after the Maya workspace has been built."""
 
     global _TOOL_WINDOW, _JOINT_LIST
-
     _TOOL_WINDOW = tool_window_module
     _JOINT_LIST = joint_list_module
 
-    state = tool_window_module._STATE
+    state = _state()
     state[_MODE_KEY] = MODE_OFF
     state[_PREVIEW_KEY] = None
     state[_REFRESH_KEY] = request_refresh
@@ -78,26 +78,14 @@ def install(tool_window_module, joint_list_module):
 
 
 def shutdown(*_):
-    """Remove temporary color data and persistent callbacks."""
+    """Remove temporary preview data and all persistent callbacks."""
 
     global _CONTROLS, _BUTTONS, _BUTTON_GROUP, _CONNECTED_BUTTONS
     global _SCRIPT_JOBS, _SCENE_CALLBACKS, _REFRESH_QUEUED
 
     _deactivate()
-
-    for job in list(_SCRIPT_JOBS):
-        try:
-            if cmds.scriptJob(exists=job):
-                cmds.scriptJob(kill=job, force=True)
-        except Exception:
-            pass
-
-    for callback_id in list(_SCENE_CALLBACKS):
-        try:
-            om.MMessage.removeCallback(callback_id)
-        except Exception:
-            pass
-
+    _remove_script_jobs()
+    _remove_scene_callbacks()
     _CONTROLS = None
     _BUTTONS = {}
     _BUTTON_GROUP = None
@@ -110,16 +98,13 @@ def shutdown(*_):
 def set_mode(mode):
     """Activate one visual preset or restore normal mesh display."""
 
-    if _TOOL_WINDOW is None:
+    if _TOOL_WINDOW is None or mode not in VALID_MODES:
         return
-    if mode not in {MODE_OFF, MODE_HEAT, MODE_SPECTRUM, MODE_GRAYSCALE}:
-        return
-
     if mode == MODE_OFF:
         _deactivate()
         return
 
-    previous_mode = _TOOL_WINDOW._STATE.get(_MODE_KEY, MODE_OFF)
+    previous_mode = _state().get(_MODE_KEY, MODE_OFF)
     try:
         joint = _require_single_selected_bound_joint()
         _activate(mode, joint)
@@ -131,43 +116,12 @@ def set_mode(mode):
         _TOOL_WINDOW._show_error(exc)
 
 
-def _activate(mode, joint):
-    state = _TOOL_WINDOW._STATE
-    mesh_shape = state.get("mesh_shape")
-    mesh_transform = state.get("mesh_transform")
-    skin_cluster = state.get("skin_cluster")
-
-    if not all((mesh_shape, mesh_transform, skin_cluster)):
-        raise RuntimeError(
-            "Skin Weight Mode requires a loaded mesh with an existing skinCluster."
-        )
-
-    for node in (mesh_shape, mesh_transform, skin_cluster, joint):
-        if not cmds.objExists(node):
-            raise RuntimeError(
-                "Skin Weight Mode could not resolve the loaded skin context."
-            )
-
-    _ensure_preview(mesh_shape, mesh_transform)
-    _update_preview_colors(mesh_shape, joint, mode)
-
-    state[_MODE_KEY] = mode
-    state[_PREVIEW_KEY] = joint
-    _set_button_state(mode)
-
-
 def request_refresh(*_):
     """Coalesce weight and selection changes into one viewport refresh."""
 
     global _REFRESH_QUEUED
-
-    if _TOOL_WINDOW is None:
+    if not _mode_is_active() or _REFRESH_QUEUED:
         return
-    if _TOOL_WINDOW._STATE.get(_MODE_KEY, MODE_OFF) == MODE_OFF:
-        return
-    if _REFRESH_QUEUED:
-        return
-
     _REFRESH_QUEUED = True
     try:
         cmds.evalDeferred(_deferred_refresh, lowestPriority=True)
@@ -176,36 +130,26 @@ def request_refresh(*_):
         refresh()
 
 
-def _deferred_refresh():
-    global _REFRESH_QUEUED
-
-    _REFRESH_QUEUED = False
-    refresh()
-
-
 def refresh(*_):
     """Read the latest influence weights and repaint the preview."""
 
-    if _TOOL_WINDOW is None:
+    if not _mode_is_active():
         return
 
-    state = _TOOL_WINDOW._STATE
+    state = _state()
     mode = state.get(_MODE_KEY, MODE_OFF)
-    if mode == MODE_OFF:
-        return
-
     mesh_shape = state.get("mesh_shape")
     mesh_transform = state.get("mesh_transform")
     joint = state.get(_PREVIEW_KEY)
-    bound = set(state.get("bound_joint_paths", set()))
+    context_nodes = (mesh_shape, mesh_transform, joint)
 
-    if not all((mesh_shape, mesh_transform, joint)):
+    if not all(context_nodes):
         _deactivate()
         return
-    if joint not in bound:
+    if joint not in set(state.get("bound_joint_paths", set())):
         _deactivate()
         return
-    if not all(cmds.objExists(node) for node in (mesh_shape, mesh_transform, joint)):
+    if not all(cmds.objExists(node) for node in context_nodes):
         _deactivate()
         return
 
@@ -216,13 +160,41 @@ def refresh(*_):
         cmds.warning("Skin Weight Mode refresh failed: {}".format(exc))
 
 
+def _activate(mode, joint):
+    state = _state()
+    mesh_shape = state.get("mesh_shape")
+    mesh_transform = state.get("mesh_transform")
+    skin_cluster = state.get("skin_cluster")
+    if not all((mesh_shape, mesh_transform, skin_cluster)):
+        raise RuntimeError(
+            "Skin Weight Mode requires a loaded mesh with an existing skinCluster."
+        )
+    for node in (mesh_shape, mesh_transform, skin_cluster, joint):
+        if not cmds.objExists(node):
+            raise RuntimeError(
+                "Skin Weight Mode could not resolve the loaded skin context."
+            )
+
+    _ensure_preview(mesh_shape, mesh_transform)
+    _update_preview_colors(mesh_shape, joint, mode)
+    state[_MODE_KEY] = mode
+    state[_PREVIEW_KEY] = joint
+    _set_button_state(mode)
+
+
+def _deferred_refresh():
+    global _REFRESH_QUEUED
+    _REFRESH_QUEUED = False
+    refresh()
+
+
 def _ensure_preview(mesh_shape, mesh_transform):
     global _PREVIEW
 
     if _PREVIEW is not None:
         same_mesh = (
-            _PREVIEW.get("mesh_shape") == mesh_shape
-            and _PREVIEW.get("mesh_transform") == mesh_transform
+            _PREVIEW.mesh_shape == mesh_shape
+            and _PREVIEW.mesh_transform == mesh_transform
         )
         if same_mesh and _preview_color_set_exists():
             _make_preview_current()
@@ -230,15 +202,10 @@ def _ensure_preview(mesh_shape, mesh_transform):
             return
         _cleanup_preview()
 
-    existing_sets = set(
-        cmds.polyColorSet(
-            mesh_transform,
-            query=True,
-            allColorSets=True,
-        ) or []
-    )
-    previous_set = _current_color_set(mesh_transform)
+    existing_sets = _all_color_sets(mesh_transform)
     color_set = _unique_color_set_name(existing_sets)
+    previous_set = _current_color_set(mesh_transform)
+    display_options = _query_display_options(mesh_transform)
 
     cmds.polyColorSet(
         mesh_transform,
@@ -252,22 +219,19 @@ def _ensure_preview(mesh_shape, mesh_transform):
         currentColorSet=True,
         colorSet=color_set,
     )
-
-    _PREVIEW = {
-        "mesh_shape": mesh_shape,
-        "mesh_transform": mesh_transform,
-        "color_set": color_set,
-        "previous_color_set": previous_set,
-        "display_options": _query_display_options(mesh_transform),
-    }
+    _PREVIEW = _PreviewSession(
+        mesh_shape=mesh_shape,
+        mesh_transform=mesh_transform,
+        color_set=color_set,
+        previous_color_set=previous_set,
+        display_options=display_options,
+    )
     _enable_color_display(mesh_transform)
 
 
 def _update_preview_colors(mesh_shape, joint, mode):
     adapter = SkinClusterAdapter.from_mesh(mesh_shape)
-    weights = adapter.influence_weights(joint)
-    rgb = _map_weights_to_rgb(weights, mode)
-
+    rgb = _map_weights_to_rgb(adapter.influence_weights(joint), mode)
     mesh_fn = om.MFnMesh(adapter.mesh_dag_path)
     vertex_count = int(mesh_fn.numVertices)
     if rgb.shape != (vertex_count, 3):
@@ -279,7 +243,6 @@ def _update_preview_colors(mesh_shape, joint, mode):
     colors.setLength(vertex_count)
     vertex_ids = om.MIntArray()
     vertex_ids.setLength(vertex_count)
-
     for index in range(vertex_count):
         colors[index] = om.MColor(
             (
@@ -292,12 +255,9 @@ def _update_preview_colors(mesh_shape, joint, mode):
         vertex_ids[index] = index
 
     _make_preview_current()
-
-    # Maya 2025 rejects an explicit None for the optional MDGModifier.
-    # Omitting optional arguments applies immediately to the current color set.
+    # Maya 2025 rejects explicit ``None`` for the optional MDGModifier.
     mesh_fn.setVertexColors(colors, vertex_ids)
-
-    _enable_color_display(_PREVIEW["mesh_transform"])
+    _enable_color_display(_PREVIEW.mesh_transform)
     cmds.refresh(force=True)
 
 
@@ -307,10 +267,9 @@ def _map_weights_to_rgb(weights, mode):
         0.0,
         1.0,
     )
-    ramp = _RAMPS[mode]
+    ramp = RAMPS[mode]
     positions = np.asarray([point[0] for point in ramp], dtype=np.float64)
     colors = np.asarray([point[1] for point in ramp], dtype=np.float64)
-
     return np.column_stack(
         [
             np.interp(values, positions, colors[:, channel])
@@ -321,62 +280,44 @@ def _map_weights_to_rgb(weights, mode):
 
 def _deactivate():
     if _TOOL_WINDOW is not None:
-        state = _TOOL_WINDOW._STATE
-        state[_MODE_KEY] = MODE_OFF
-        state[_PREVIEW_KEY] = None
-
+        _state()[_MODE_KEY] = MODE_OFF
+        _state()[_PREVIEW_KEY] = None
     _set_button_state(MODE_OFF)
     _cleanup_preview()
 
 
 def _cleanup_preview():
     global _PREVIEW, _CLEANING_UP
-
     if _PREVIEW is None or _CLEANING_UP:
         return
 
     _CLEANING_UP = True
     preview = _PREVIEW
     _PREVIEW = None
-
     try:
-        mesh_transform = preview.get("mesh_transform")
-        if not mesh_transform or not cmds.objExists(mesh_transform):
+        if not preview.mesh_transform or not cmds.objExists(
+            preview.mesh_transform
+        ):
             return
 
-        all_sets = set(
-            cmds.polyColorSet(
-                mesh_transform,
-                query=True,
-                allColorSets=True,
-            ) or []
-        )
-        previous_set = preview.get("previous_color_set")
-        preview_set = preview.get("color_set")
-
-        if previous_set and previous_set in all_sets:
+        all_sets = _all_color_sets(preview.mesh_transform)
+        if preview.previous_color_set in all_sets:
+            _set_current_color_set(
+                preview.mesh_transform,
+                preview.previous_color_set,
+            )
+        if preview.color_set in all_sets:
             try:
                 cmds.polyColorSet(
-                    mesh_transform,
-                    currentColorSet=True,
-                    colorSet=previous_set,
-                )
-            except Exception:
-                pass
-
-        if preview_set and preview_set in all_sets:
-            try:
-                cmds.polyColorSet(
-                    mesh_transform,
+                    preview.mesh_transform,
                     delete=True,
-                    colorSet=preview_set,
+                    colorSet=preview.color_set,
                 )
             except Exception:
                 pass
-
         _restore_display_options(
-            mesh_transform,
-            preview.get("display_options", {}),
+            preview.mesh_transform,
+            preview.display_options,
         )
         cmds.refresh(force=True)
     finally:
@@ -388,15 +329,13 @@ def _require_single_selected_bound_joint():
         selected = list(_JOINT_LIST.selected_joint_paths())
     except Exception:
         selected = []
-
     if len(selected) != 1:
         raise RuntimeError(
             "Skin Weight Mode requires exactly one selected bound influence."
         )
 
     joint = selected[0]
-    bound = set(_TOOL_WINDOW._STATE.get("bound_joint_paths", set()))
-    if joint not in bound:
+    if joint not in set(_state().get("bound_joint_paths", set())):
         raise RuntimeError(
             "The selected joint is pending and has no skin weights to display."
         )
@@ -409,62 +348,31 @@ def _require_single_selected_bound_joint():
 
 def _install_controls():
     global _QT, _CONTROLS, _BUTTONS, _BUTTON_GROUP
-
     try:
         QtWidgets, QtGui, QtCore, binding = import_qt_modules()
         _QT = (QtWidgets, QtGui, QtCore, binding)
-
-        pointer = omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LABEL)
-        if not pointer:
-            return False
-
-        widget = _wrap(binding)(int(pointer), QtWidgets.QWidget)
-        container, layout, index = _managing_layout(widget)
+        label_widget = qt_helpers.wrap_instance(
+            omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LABEL),
+            QtWidgets.QWidget,
+            binding,
+        )
+        container, layout, index = qt_helpers.find_managing_layout(label_widget)
         if layout is None:
             return False
 
-        existing = container.findChild(QtWidgets.QWidget, _CONTROLS_NAME)
-        if existing is not None:
-            layout.removeWidget(existing)
-            existing.deleteLater()
-
-        controls = QtWidgets.QWidget(container)
-        controls.setObjectName(_CONTROLS_NAME)
-        row = QtWidgets.QHBoxLayout(controls)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-        row.addWidget(QtWidgets.QLabel("Skin Weight Mode:", controls))
-        row.addSpacing(3)
-
-        group = QtWidgets.QButtonGroup(controls)
-        group.setExclusive(True)
-        buttons = {}
-
-        definitions = (
-            (MODE_OFF, "Off — normal mesh shading"),
-            (MODE_HEAT, "Black / Red / Yellow"),
-            (MODE_SPECTRUM, "Blue / Green / Yellow / Orange / Red"),
-            (MODE_GRAYSCALE, "Black / Grey / White"),
+        qt_helpers.remove_named_child(
+            container,
+            layout,
+            QtWidgets.QWidget,
+            _CONTROLS_NAME,
         )
-
-        for mode, tooltip in definitions:
-            button = QtWidgets.QToolButton(controls)
-            button.setCheckable(True)
-            button.setAutoRaise(True)
-            button.setFixedSize(22, 22)
-            button.setToolTip(tooltip)
-            button.setIcon(_icon(mode, QtGui, QtCore))
-            button.setIconSize(QtCore.QSize(18, 18))
-            button.clicked.connect(
-                lambda _checked=False, value=mode: set_mode(value)
-            )
-            group.addButton(button)
-            row.addWidget(button)
-            buttons[mode] = button
-
-        row.addStretch(1)
+        controls, buttons, group = _build_mode_controls(
+            container,
+            QtWidgets,
+            QtGui,
+            QtCore,
+        )
         layout.insertWidget(index + 1, controls)
-
         _CONTROLS = controls
         _BUTTONS = buttons
         _BUTTON_GROUP = group
@@ -476,11 +384,40 @@ def _install_controls():
         return False
 
 
+def _build_mode_controls(container, QtWidgets, QtGui, QtCore):
+    controls = QtWidgets.QWidget(container)
+    controls.setObjectName(_CONTROLS_NAME)
+    row = QtWidgets.QHBoxLayout(controls)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(0)
+    row.addWidget(QtWidgets.QLabel("Skin Weight Mode:", controls))
+    row.addSpacing(3)
+
+    group = QtWidgets.QButtonGroup(controls)
+    group.setExclusive(True)
+    buttons = {}
+    for mode in MODE_ORDER:
+        button = QtWidgets.QToolButton(controls)
+        button.setCheckable(True)
+        button.setAutoRaise(True)
+        button.setFixedSize(22, 22)
+        button.setToolTip(MODE_TOOLTIPS[mode])
+        button.setIcon(_icon(mode, QtGui, QtCore))
+        button.setIconSize(QtCore.QSize(18, 18))
+        button.clicked.connect(
+            lambda _checked=False, value=mode: set_mode(value)
+        )
+        group.addButton(button)
+        row.addWidget(button)
+        buttons[mode] = button
+    row.addStretch(1)
+    return controls, buttons, group
+
+
 def _install_tree_callback():
     control = _TOOL_WINDOW.CTRL_JOINT_LIST
     if not cmds.treeView(control, exists=True):
         return
-
     try:
         cmds.treeView(
             control,
@@ -498,74 +435,72 @@ def _tree_selection_changed(item_id, selected):
         )
     except Exception:
         allowed = True
-
     if not allowed:
         return False
 
-    if bool(selected) and _TOOL_WINDOW._STATE.get(_MODE_KEY) != MODE_OFF:
-        state = _TOOL_WINDOW._STATE
-        joint = state.get("joint_item_to_path", {}).get(item_id)
-        if joint in set(state.get("bound_joint_paths", set())):
-            state[_PREVIEW_KEY] = joint
+    if bool(selected) and _mode_is_active():
+        joint = _state().get("joint_item_to_path", {}).get(item_id)
+        if joint in set(_state().get("bound_joint_paths", set())):
+            _state()[_PREVIEW_KEY] = joint
             request_refresh()
-
     return True
 
 
 def _connect_operation_buttons():
     global _CONNECTED_BUTTONS
-
     if _QT is None:
         return
 
+    from ad_skin_tools.ui import component_section, skin_operations
+
     QtWidgets, _QtGui, _QtCore, binding = _QT
     connected = []
-
     for name in (
         _TOOL_WINDOW.CTRL_BIND_BUTTON,
-        "adSkin_addInfluenceButton",
-        "adSkin_floodSelectedToJointButton",
-        "adSkin_smoothSelectedComponentsButton",
+        skin_operations.CTRL_ADD_INFLUENCE_BUTTON,
+        component_section.CTRL_FLOOD_BUTTON,
+        component_section.CTRL_SMOOTH_BUTTON,
     ):
-        pointer = omui.MQtUtil.findControl(name)
-        if not pointer:
+        button = qt_helpers.wrap_instance(
+            omui.MQtUtil.findControl(name),
+            QtWidgets.QPushButton,
+            binding,
+        )
+        if button is None:
             continue
         try:
-            button = _wrap(binding)(int(pointer), QtWidgets.QPushButton)
             button.clicked.connect(request_refresh)
             connected.append(button)
         except Exception:
             pass
 
-    pointer = omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LABEL)
-    if pointer:
-        try:
-            label = _wrap(binding)(int(pointer), QtWidgets.QWidget)
-            container, _layout, _index = _managing_layout(label)
-            for button in container.findChildren(QtWidgets.QPushButton):
-                if button.text() == "Load Mesh":
-                    button.clicked.connect(lambda *_: _deactivate())
-                    connected.append(button)
-                    break
-        except Exception:
-            pass
-
+    load_button = _find_load_mesh_button(QtWidgets, binding)
+    if load_button is not None:
+        load_button.clicked.connect(lambda *_: _deactivate())
+        connected.append(load_button)
     _CONNECTED_BUTTONS = connected
+
+
+def _find_load_mesh_button(QtWidgets, binding):
+    label = qt_helpers.wrap_instance(
+        omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LABEL),
+        QtWidgets.QWidget,
+        binding,
+    )
+    container, _layout, _index = qt_helpers.find_managing_layout(label)
+    if container is None:
+        return None
+    for button in container.findChildren(QtWidgets.QPushButton):
+        if button.text() == "Load Mesh":
+            return button
+    return None
 
 
 def _install_script_jobs():
     global _SCRIPT_JOBS
-
-    for job in list(_SCRIPT_JOBS):
-        try:
-            if cmds.scriptJob(exists=job):
-                cmds.scriptJob(kill=job, force=True)
-        except Exception:
-            pass
-
+    _remove_script_jobs()
     _SCRIPT_JOBS = []
     parent = _TOOL_WINDOW.WINDOW_NAME
-
     for event_name, callback in (
         ("ToolChanged", _tool_changed),
         ("Undo", request_refresh),
@@ -581,7 +516,6 @@ def _install_script_jobs():
             )
         except Exception:
             pass
-
     try:
         _SCRIPT_JOBS.append(
             cmds.scriptJob(
@@ -593,15 +527,18 @@ def _install_script_jobs():
         pass
 
 
-def _install_scene_callbacks():
-    global _SCENE_CALLBACKS
-
-    for callback_id in list(_SCENE_CALLBACKS):
+def _remove_script_jobs():
+    for job in list(_SCRIPT_JOBS):
         try:
-            om.MMessage.removeCallback(callback_id)
+            if cmds.scriptJob(exists=job):
+                cmds.scriptJob(kill=job, force=True)
         except Exception:
             pass
 
+
+def _install_scene_callbacks():
+    global _SCENE_CALLBACKS
+    _remove_scene_callbacks()
     _SCENE_CALLBACKS = []
     for message in (
         om.MSceneMessage.kBeforeNew,
@@ -616,46 +553,53 @@ def _install_scene_callbacks():
             pass
 
 
+def _remove_scene_callbacks():
+    for callback_id in list(_SCENE_CALLBACKS):
+        try:
+            om.MMessage.removeCallback(callback_id)
+        except Exception:
+            pass
+
+
 def _before_scene_change(*_):
     _deactivate()
 
 
 def _tool_changed(*_):
-    if _TOOL_WINDOW is None:
-        return
-    if _TOOL_WINDOW._STATE.get(_MODE_KEY, MODE_OFF) == MODE_OFF:
-        return
-
-    if _is_skin_paint_context(_current_context()):
+    if _mode_is_active() and _is_skin_paint_context(_current_context()):
         _deactivate()
 
 
 def _preview_color_set_exists():
-    if _PREVIEW is None:
-        return False
-
-    mesh_transform = _PREVIEW.get("mesh_transform")
-    color_set = _PREVIEW.get("color_set")
-    if not mesh_transform or not cmds.objExists(mesh_transform):
-        return False
-
-    return color_set in set(
-        cmds.polyColorSet(
-            mesh_transform,
-            query=True,
-            allColorSets=True,
-        ) or []
+    return bool(
+        _PREVIEW is not None
+        and _PREVIEW.mesh_transform
+        and cmds.objExists(_PREVIEW.mesh_transform)
+        and _PREVIEW.color_set in _all_color_sets(_PREVIEW.mesh_transform)
     )
 
 
 def _make_preview_current():
     if not _preview_color_set_exists():
         raise RuntimeError("Skin Weight Mode preview color set is unavailable.")
+    _set_current_color_set(_PREVIEW.mesh_transform, _PREVIEW.color_set)
 
+
+def _set_current_color_set(mesh_transform, color_set):
     cmds.polyColorSet(
-        _PREVIEW["mesh_transform"],
+        mesh_transform,
         currentColorSet=True,
-        colorSet=_PREVIEW["color_set"],
+        colorSet=color_set,
+    )
+
+
+def _all_color_sets(mesh_transform):
+    return set(
+        cmds.polyColorSet(
+            mesh_transform,
+            query=True,
+            allColorSets=True,
+        ) or []
     )
 
 
@@ -673,7 +617,6 @@ def _current_color_set(mesh_transform):
 def _unique_color_set_name(existing_sets):
     if _COLOR_SET_BASE not in existing_sets:
         return _COLOR_SET_BASE
-
     index = 1
     while "{}{}".format(_COLOR_SET_BASE, index) in existing_sets:
         index += 1
@@ -682,16 +625,12 @@ def _unique_color_set_name(existing_sets):
 
 def _query_display_options(mesh_transform):
     result = {}
-    for flag, value in (
-        ("colorShadedDisplay", True),
-        ("colorMaterialChannel", True),
-        ("materialBlend", True),
-    ):
+    for flag in _DISPLAY_FLAGS:
         try:
             result[flag] = cmds.polyOptions(
                 mesh_transform,
                 query=True,
-                **{flag: value}
+                **{flag: True}
             )
         except Exception:
             pass
@@ -709,17 +648,12 @@ def _enable_color_display(mesh_transform):
 
 def _restore_display_options(mesh_transform, options):
     kwargs = {}
-    for flag in (
-        "colorShadedDisplay",
-        "colorMaterialChannel",
-        "materialBlend",
-    ):
+    for flag in _DISPLAY_FLAGS:
         value = options.get(flag)
         if isinstance(value, (list, tuple)) and len(value) == 1:
             value = value[0]
         if value is not None:
             kwargs[flag] = value
-
     if kwargs:
         try:
             cmds.polyOptions(mesh_transform, **kwargs)
@@ -730,17 +664,13 @@ def _restore_display_options(mesh_transform, options):
 def _is_skin_paint_context(context):
     if not context:
         return False
-
     try:
         context_class = cmds.contextInfo(context, c=True)
     except Exception:
         context_class = ""
-
     text = "{} {}".format(context, context_class).casefold()
     return "artattrskin" in text or (
-        "skin" in text
-        and "paint" in text
-        and "context" in text
+        "skin" in text and "paint" in text and "context" in text
     )
 
 
@@ -753,12 +683,7 @@ def _current_context():
 
 def _set_button_state(mode):
     for value, button in _BUTTONS.items():
-        try:
-            previous = button.blockSignals(True)
-            button.setChecked(value == mode)
-            button.blockSignals(previous)
-        except Exception:
-            pass
+        qt_helpers.set_checked_silently(button, value == mode)
 
 
 def _icon(mode, QtGui, QtCore):
@@ -771,7 +696,6 @@ def _icon(mode, QtGui, QtCore):
         hints = getattr(QtGui.QPainter, "RenderHint", QtGui.QPainter)
         painter.setRenderHint(hints.Antialiasing, True)
         rect = pixmap.rect().adjusted(1, 1, -2, -2)
-
         if mode == MODE_OFF:
             painter.fillRect(rect, QtGui.QColor(235, 235, 235))
             painter.setPen(QtGui.QPen(QtGui.QColor(210, 30, 30), 2.0))
@@ -783,43 +707,25 @@ def _icon(mode, QtGui, QtCore):
                 rect.right(),
                 0,
             )
-            for position, rgb in _RAMPS[mode]:
+            for position, rgb in RAMPS[mode]:
                 gradient.setColorAt(
                     position,
                     QtGui.QColor.fromRgbF(*rgb),
                 )
             painter.fillRect(rect, gradient)
-
         painter.setPen(QtGui.QPen(QtGui.QColor(30, 30, 30), 1.0))
         painter.drawRect(rect)
     finally:
         painter.end()
-
     return QtGui.QIcon(pixmap)
 
 
-def _managing_layout(widget):
-    child = widget
-    parent = widget.parentWidget() if widget is not None else None
-
-    while parent is not None:
-        layout = parent.layout()
-        if layout is not None:
-            index = layout.indexOf(child)
-            if index >= 0:
-                return parent, layout, index
-        child = parent
-        parent = parent.parentWidget()
-
-    return None, None, -1
+def _mode_is_active():
+    return bool(
+        _TOOL_WINDOW is not None
+        and _state().get(_MODE_KEY, MODE_OFF) != MODE_OFF
+    )
 
 
-def _wrap(binding):
-    if binding == "PySide6":
-        from shiboken6 import wrapInstance
-
-        return wrapInstance
-
-    from shiboken2 import wrapInstance
-
-    return wrapInstance
+def _state():
+    return _TOOL_WINDOW._STATE
