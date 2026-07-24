@@ -1,20 +1,14 @@
-"""Joint-list UI and influence-lock actions.
+"""Joint-list UI, influence locks, and list-facing scene actions.
 
-This module is the single source of truth for the flat Maya ``treeView`` used by
-AD Skin Tool. It intentionally uses the Maya-compatible command contract:
-
-- create each item first;
-- configure item-dependent flags in later commands;
-- rebuild the tree after bulk lock operations;
-- query item existence before addressing a row;
-- do not install per-joint tooltips.
+The Maya ``treeView`` remains the canonical row control. Authoritative joint
+order is stored in ``_STATE[\"joints\"]``; alphabetical sorting changes only the
+presentation order used to build rows.
 """
 
 import builtins
 
 import maya.cmds as cmds
 
-from ad_skin_tools.core.compat import import_qt_modules
 from ad_skin_tools.core.influence_lock import (
     is_influence_locked,
     set_influence_locked,
@@ -37,12 +31,13 @@ _UNLOCKED_ICON_CANDIDATES = (
     "unlock.png",
     "unlocked.png",
 )
+_SORT_A_TO_Z = "a_to_z"
+_SORT_Z_TO_A = "z_to_a"
+_PRESENTATION_REFRESH_KEY = "joint_presentation_refresh"
 
 _TOOL_WINDOW = None
 _ICON_CACHE = {}
 _PROGRAMMATIC_MULTI_SELECT = False
-_DRAG_SELECTION_FILTER = None
-_DRAG_SELECTION_VIEW = None
 
 
 def configure(tool_window_module) -> None:
@@ -51,10 +46,13 @@ def configure(tool_window_module) -> None:
     global _TOOL_WINDOW
     _TOOL_WINDOW = tool_window_module
 
-    tool_window_module._STATE.setdefault("joint_item_to_path", {})
-    tool_window_module._STATE.setdefault("joint_path_to_item", {})
-    tool_window_module._STATE.setdefault("bound_joint_paths", set())
-    tool_window_module._STATE.setdefault("pending_locked_joints", set())
+    state = tool_window_module._STATE
+    state.setdefault("joint_item_to_path", {})
+    state.setdefault("joint_path_to_item", {})
+    state.setdefault("bound_joint_paths", set())
+    state.setdefault("pending_locked_joints", set())
+    state.setdefault("joint_display_order", [])
+    state.setdefault("joint_sort_mode", _SORT_A_TO_Z)
 
 
 def build_section() -> None:
@@ -91,7 +89,6 @@ def build_section() -> None:
         button=3,
         postMenuCommand=_populate_joint_context_menu,
     )
-    _install_left_drag_selection()
 
     _TOOL_WINDOW._button_row(
         [
@@ -109,64 +106,64 @@ def build_section() -> None:
 
 
 def set_joint_list(joints) -> None:
-    """Render one stable row per joint with no per-row tooltip."""
+    """Render stable rows without changing authoritative joint order."""
 
     _require_configured()
 
     normalized_joints = _TOOL_WINDOW._unique_joint_paths(joints)
     previous_selected_paths = set(selected_joint_paths())
+    control = _TOOL_WINDOW.CTRL_JOINT_LIST
+    previous_scroll_position = _query_vertical_scroll_position(control)
 
-    _TOOL_WINDOW._STATE["joints"] = normalized_joints
-    _TOOL_WINDOW._STATE["joint_display_to_path"] = {}
-    _TOOL_WINDOW._STATE["joint_path_to_display"] = {}
-    _TOOL_WINDOW._STATE["joint_item_to_path"] = {}
-    _TOOL_WINDOW._STATE["joint_path_to_item"] = {}
+    display_labels = {
+        joint: _TOOL_WINDOW._make_unique_joint_label(
+            joint,
+            normalized_joints,
+        )
+        for joint in normalized_joints
+    }
+    display_order = _sorted_display_order(normalized_joints, display_labels)
+
+    state = _TOOL_WINDOW._STATE
+    state["joints"] = normalized_joints
+    state["joint_display_order"] = display_order
+    state["joint_display_to_path"] = {}
+    state["joint_path_to_display"] = {}
+    state["joint_item_to_path"] = {}
+    state["joint_path_to_item"] = {}
 
     bound_paths = set()
-    if _TOOL_WINDOW._STATE.get("has_skin_cluster"):
+    if state.get("has_skin_cluster"):
         try:
-            adapter = SkinClusterAdapter.from_mesh(
-                _TOOL_WINDOW._STATE["mesh_shape"]
-            )
+            adapter = SkinClusterAdapter.from_mesh(state["mesh_shape"])
             bound_paths = set(adapter.influences())
-            _TOOL_WINDOW._STATE["skin_cluster"] = adapter.skin_cluster
+            state["skin_cluster"] = adapter.skin_cluster
         except Exception:
-            # An unavailable read displays rows as pending instead of aborting
-            # the window refresh.
+            # A failed read displays rows as pending instead of aborting refresh.
             bound_paths = set()
-    _TOOL_WINDOW._STATE["bound_joint_paths"] = bound_paths
+    state["bound_joint_paths"] = bound_paths
 
-    pending_locks = set(
-        _TOOL_WINDOW._STATE.get("pending_locked_joints", set())
-    )
+    pending_locks = set(state.get("pending_locked_joints", set()))
     pending_locks.intersection_update(normalized_joints)
     pending_locks.difference_update(bound_paths)
-    _TOOL_WINDOW._STATE["pending_locked_joints"] = pending_locks
+    state["pending_locked_joints"] = pending_locks
 
-    control = _TOOL_WINDOW.CTRL_JOINT_LIST
     if not cmds.treeView(control, exists=True):
         return
 
     cmds.treeView(control, edit=True, removeAll=True)
 
-    for index, joint in enumerate(normalized_joints):
+    for index, joint in enumerate(display_order):
         item_id = "joint_{:04d}".format(index)
-        display_label = _TOOL_WINDOW._make_unique_joint_label(
-            joint,
-            normalized_joints,
-        )
-        _TOOL_WINDOW._STATE["joint_display_to_path"][display_label] = joint
-        _TOOL_WINDOW._STATE["joint_path_to_display"][joint] = display_label
-        _TOOL_WINDOW._STATE["joint_item_to_path"][item_id] = joint
-        _TOOL_WINDOW._STATE["joint_path_to_item"][joint] = item_id
+        display_label = display_labels[joint]
+        state["joint_display_to_path"][display_label] = joint
+        state["joint_path_to_display"][joint] = display_label
+        state["joint_item_to_path"][item_id] = joint
+        state["joint_path_to_item"][joint] = item_id
 
-        # Maya can resolve item-dependent flags before a new item is fully
-        # registered when they share one command. Keep every phase separate.
-        cmds.treeView(
-            control,
-            edit=True,
-            addItem=(item_id, ""),
-        )
+        # Keep item creation and item-dependent configuration in separate Maya
+        # commands; combining them is unreliable across Maya versions.
+        cmds.treeView(control, edit=True, addItem=(item_id, ""))
         cmds.treeView(
             control,
             edit=True,
@@ -193,6 +190,8 @@ def set_joint_list(joints) -> None:
         _render_lock_button(item_id, joint)
 
     select_joint_paths(previous_selected_paths)
+    _refresh_presentation()
+    _restore_vertical_scroll_position(control, previous_scroll_position)
 
 
 def add_selected_joints() -> None:
@@ -269,6 +268,54 @@ def show_selected_joints_in_list() -> None:
         select_joint_paths(matched)
         _TOOL_WINDOW._info(
             "Found {} selected joint(s) in the list.".format(len(matched))
+        )
+    except Exception as exc:
+        _TOOL_WINDOW._show_error(exc)
+
+
+def select_vertices() -> None:
+    """Select loaded-mesh vertices affected by selected bound influences."""
+
+    try:
+        _TOOL_WINDOW._require_not_busy()
+        _TOOL_WINDOW._require_loaded_mesh()
+
+        selected = selected_joint_paths()
+        if not selected:
+            cmds.warning("No joints selected in the list.")
+            return
+
+        bound = set(_TOOL_WINDOW._STATE.get("bound_joint_paths", set()))
+        bound_selected = [joint for joint in selected if joint in bound]
+        if not bound_selected:
+            cmds.warning(
+                "Selected rows are pending joints. Only bound influences "
+                "can have influenced vertices."
+            )
+            return
+
+        adapter = SkinClusterAdapter.from_mesh(
+            _TOOL_WINDOW._STATE["mesh_shape"]
+        )
+        vertex_ids = adapter.affected_vertex_ids(bound_selected)
+        if len(vertex_ids) == 0:
+            cmds.warning(
+                "Selected bound influences have no non-zero vertices on "
+                "the loaded mesh."
+            )
+            return
+
+        mesh_transform = _TOOL_WINDOW._STATE.get("mesh_transform")
+        if not mesh_transform or not cmds.objExists(mesh_transform):
+            raise RuntimeError("Loaded mesh transform is unavailable.")
+
+        components = _vertex_component_ranges(mesh_transform, vertex_ids)
+        cmds.select(components, replace=True)
+        _TOOL_WINDOW._info(
+            "Selected {} influenced vertex(s) from {} bound joint(s).".format(
+                len(vertex_ids),
+                len(bound_selected),
+            )
         )
     except Exception as exc:
         _TOOL_WINDOW._show_error(exc)
@@ -664,6 +711,11 @@ def _populate_joint_context_menu(menu, *_):
     )
     cmds.menuItem(divider=True, parent=menu)
     cmds.menuItem(
+        label="Select Vertices",
+        parent=menu,
+        command=lambda *_: select_vertices(),
+    )
+    cmds.menuItem(
         label="Select Joints In The Scene",
         parent=menu,
         command=lambda *_: select_joints_in_scene(),
@@ -725,185 +777,86 @@ def _tree_item_exists(control: str, item_id: str) -> bool:
         return False
 
 
-def _install_left_drag_selection() -> None:
-    """Install optional plain-left-drag range selection on Maya's Qt tree."""
+def _sorted_display_order(joints, display_labels):
+    mode = _TOOL_WINDOW._STATE.get("joint_sort_mode", _SORT_A_TO_Z)
+    reverse = mode == _SORT_Z_TO_A
+    return sorted(
+        joints,
+        key=lambda joint: (
+            str(display_labels[joint]).casefold(),
+            str(joint).casefold(),
+        ),
+        reverse=reverse,
+    )
 
-    global _DRAG_SELECTION_FILTER
-    global _DRAG_SELECTION_VIEW
 
+def _refresh_presentation() -> None:
+    callback = _TOOL_WINDOW._STATE.get(_PRESENTATION_REFRESH_KEY)
+    if not callable(callback):
+        return
     try:
-        from maya import OpenMayaUI as omui
-
-        QtWidgets, _QtGui, QtCore, binding_name = import_qt_modules()
-        wrap_instance = _qt_wrap_instance(binding_name)
-        pointer = omui.MQtUtil.findControl(_TOOL_WINDOW.CTRL_JOINT_LIST)
-        if not pointer:
-            return
-
-        widget = wrap_instance(int(pointer), QtWidgets.QWidget)
-        view = (
-            widget
-            if isinstance(widget, QtWidgets.QTreeView)
-            else widget.findChild(QtWidgets.QTreeView)
-        )
-        if view is None:
-            return
-
-        if _DRAG_SELECTION_FILTER is not None and _DRAG_SELECTION_VIEW is not None:
-            try:
-                _DRAG_SELECTION_VIEW.viewport().removeEventFilter(
-                    _DRAG_SELECTION_FILTER
-                )
-            except Exception:
-                pass
-
-        event_types = getattr(QtCore.QEvent, "Type", QtCore.QEvent)
-        mouse_buttons = getattr(QtCore.Qt, "MouseButton", QtCore.Qt)
-        keyboard_modifiers = getattr(
-            QtCore.Qt,
-            "KeyboardModifier",
-            QtCore.Qt,
-        )
-        left_button = mouse_buttons.LeftButton
-        no_modifier = keyboard_modifiers.NoModifier
-
-        class JointListDragSelectionFilter(QtCore.QObject):
-            def __init__(self, tree_view):
-                super().__init__(tree_view)
-                self.view = tree_view
-                self.anchor_index = None
-                self.press_position = None
-                self.last_row = None
-                self.dragging = False
-
-            def eventFilter(self, watched, event):
-                event_type = event.type()
-
-                if event_type == event_types.MouseButtonPress:
-                    self._reset()
-                    if event.button() != left_button:
-                        return False
-                    if event.modifiers() != no_modifier:
-                        return False
-
-                    position = _mouse_event_position(event)
-                    index = self.view.indexAt(position)
-                    if not index.isValid():
-                        return False
-
-                    self.anchor_index = index
-                    self.press_position = position
-                    self.last_row = index.row()
-                    return False
-
-                if event_type == event_types.MouseMove:
-                    if self.anchor_index is None:
-                        return False
-                    if event.modifiers() != no_modifier:
-                        self._reset()
-                        return False
-                    if not (event.buttons() & left_button):
-                        self._reset()
-                        return False
-
-                    position = _mouse_event_position(event)
-                    if not self.dragging:
-                        distance = (
-                            position - self.press_position
-                        ).manhattanLength()
-                        if distance < QtWidgets.QApplication.startDragDistance():
-                            return False
-                        self.dragging = True
-
-                    index = self.view.indexAt(position)
-                    if not index.isValid():
-                        return True
-                    if index.row() == self.last_row:
-                        return True
-
-                    paths = _joint_paths_in_view_range(
-                        self.view,
-                        self.anchor_index,
-                        index,
-                    )
-                    if paths:
-                        select_joint_paths(paths)
-                    self.last_row = index.row()
-                    return True
-
-                if event_type == event_types.MouseButtonRelease:
-                    was_dragging = self.dragging
-                    self._reset()
-                    return bool(was_dragging)
-
-                return False
-
-            def _reset(self):
-                self.anchor_index = None
-                self.press_position = None
-                self.last_row = None
-                self.dragging = False
-
-        _DRAG_SELECTION_VIEW = view
-        _DRAG_SELECTION_FILTER = JointListDragSelectionFilter(view)
-        view.viewport().installEventFilter(_DRAG_SELECTION_FILTER)
+        callback()
     except Exception:
-        _DRAG_SELECTION_FILTER = None
-        _DRAG_SELECTION_VIEW = None
+        pass
 
 
-def _joint_paths_in_view_range(view, anchor_index, current_index):
-    """Return visible joint paths between two flat-tree model indexes."""
+def _query_vertical_scroll_position(control):
+    if not cmds.treeView(control, exists=True):
+        return None
+    try:
+        return int(
+            cmds.treeView(
+                control,
+                query=True,
+                verticalScrollPosition=True,
+            )
+        )
+    except Exception:
+        return None
 
-    if anchor_index.parent() != current_index.parent():
+
+def _restore_vertical_scroll_position(control, position) -> None:
+    if position is None or not cmds.treeView(control, exists=True):
+        return
+    try:
+        cmds.treeView(
+            control,
+            edit=True,
+            verticalScrollPosition=max(0, int(position)),
+        )
+    except Exception:
+        pass
+
+
+def _vertex_component_ranges(mesh_transform: str, vertex_ids):
+    ids = sorted({int(vertex_id) for vertex_id in vertex_ids})
+    if not ids:
         return []
 
-    parent = anchor_index.parent()
-    first_row, last_row = sorted((anchor_index.row(), current_index.row()))
-    model = view.model()
-    display_to_path = _TOOL_WINDOW._STATE.get("joint_display_to_path", {})
-    item_to_path = _TOOL_WINDOW._STATE.get("joint_item_to_path", {})
-    ordered_paths = builtins.list(item_to_path.values())
-    paths = []
+    components = []
+    range_start = ids[0]
+    previous = ids[0]
 
-    for row in range(first_row, last_row + 1):
-        try:
-            if view.isRowHidden(row, parent):
-                continue
-        except Exception:
-            pass
-
-        index = model.index(row, 0, parent)
-        if not index.isValid():
+    for vertex_id in ids[1:]:
+        if vertex_id == previous + 1:
+            previous = vertex_id
             continue
+        components.append(
+            _format_vertex_range(mesh_transform, range_start, previous)
+        )
+        range_start = vertex_id
+        previous = vertex_id
 
-        value = index.data()
-        label = "" if value is None else str(value)
-        joint = display_to_path.get(label) or item_to_path.get(label)
-        if joint is None and 0 <= row < len(ordered_paths):
-            joint = ordered_paths[row]
-        if joint and joint not in paths:
-            paths.append(joint)
-
-    return paths
-
-
-def _mouse_event_position(event):
-    position = getattr(event, "position", None)
-    if callable(position):
-        return position().toPoint()
-    return event.pos()
+    components.append(
+        _format_vertex_range(mesh_transform, range_start, previous)
+    )
+    return components
 
 
-def _qt_wrap_instance(binding_name):
-    if binding_name == "PySide6":
-        from shiboken6 import wrapInstance
-
-        return wrapInstance
-
-    from shiboken2 import wrapInstance
-
-    return wrapInstance
+def _format_vertex_range(mesh_transform: str, start: int, end: int) -> str:
+    if start == end:
+        return "{}.vtx[{}]".format(mesh_transform, start)
+    return "{}.vtx[{}:{}]".format(mesh_transform, start, end)
 
 
 def _require_configured() -> None:
