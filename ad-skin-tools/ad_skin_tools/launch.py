@@ -11,6 +11,8 @@ def _install_ui(
     smoothing_bind_section,
     component_section,
 ):
+    """Install module overrides before Maya builds the window."""
+
     skin_operations.install(tool_window)
     global_owner_tag.install(tool_window, joint_list)
     smoothing_bind_section.install(tool_window, skin_operations)
@@ -21,13 +23,31 @@ def _install_ui(
     )
 
 
-def _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps):
-    """Keep icon and viewport interpolation on the same exact ramp data."""
+def _install_post_show_ui(
+    tool_window,
+    joint_list,
+    joint_search,
+    joint_drag_selection,
+    skin_weight_mode,
+):
+    """Install Qt integrations that require built Maya controls."""
 
-    skin_weight_mode._RAMPS = skin_weight_ramps.RAMPS
+    joint_search.install(tool_window)
+    joint_drag_selection.install(
+        tool_window.CTRL_JOINT_LIST,
+        selection_pruner=joint_search.prune_hidden_selection,
+    )
+    skin_weight_mode.install(tool_window, joint_list)
+
+
+def _reload_modules(modules):
+    for module in modules:
+        importlib.reload(module)
 
 
 def reload_modules():
+    """Reload implementation modules without rebuilding the window twice."""
+
     import ad_skin_tools.core.compat as compat
     import ad_skin_tools.core.undo as undo
     import ad_skin_tools.core.selection as selection
@@ -60,6 +80,8 @@ def reload_modules():
     import ad_skin_tools.core.automatic_surface_commands as automatic_surface_commands
     import ad_skin_tools.core.add_influence as add_influence
 
+    import ad_skin_tools.ui.qt_helpers as qt_helpers
+    import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
     import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.joint_drag_selection as joint_drag_selection
@@ -69,66 +91,59 @@ def reload_modules():
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
     import ad_skin_tools.ui.component_section as component_section
     import ad_skin_tools.ui.skin_weight_mode as skin_weight_mode
-    import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
     import ad_skin_tools.ui.tool_window as tool_window
 
     try:
         skin_weight_mode.shutdown()
     except Exception:
         pass
+    try:
+        joint_drag_selection.uninstall()
+    except Exception:
+        pass
 
-    for module in [
-        compat,
-        undo,
-        selection,
-        mesh,
-        skin_cluster,
-        component_selection,
-        influence_lock,
-        undoable_skin_weights,
-        component_selection_weights,
-        component_flood,
-        component_smooth,
-        ownership_mesh_context,
-        ownership_exact_ties,
-        ownership_closest,
-        ownership_facing,
-        ownership_global,
-        ownership_loops,
-        ownership_pipeline,
-        smoothing_diffusion,
-        smoothing_cutoff,
-        smoothing_constraints,
-        smoothing_options,
-        smoothing_validation,
-        smoothing_solver,
-        smoothed_automatic_bind,
-        automatic_surface_commands,
-        add_influence,
-    ]:
-        importlib.reload(module)
-
-    importlib.reload(smoothing_controls)
-    importlib.reload(joint_list)
-    importlib.reload(joint_drag_selection)
-    importlib.reload(joint_search)
-    importlib.reload(global_owner_tag)
-    importlib.reload(skin_operations)
-    importlib.reload(smoothing_bind_section)
-    importlib.reload(component_section)
-    importlib.reload(skin_weight_ramps)
-    importlib.reload(skin_weight_mode)
-    importlib.reload(tool_window)
-
-    _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps)
-
-    _install_ui(
-        tool_window,
-        joint_list,
-        global_owner_tag,
-        skin_operations,
-        smoothing_bind_section,
-        component_section,
+    _reload_modules(
+        (
+            compat,
+            undo,
+            selection,
+            mesh,
+            skin_cluster,
+            component_selection,
+            influence_lock,
+            undoable_skin_weights,
+            component_selection_weights,
+            component_flood,
+            component_smooth,
+            ownership_mesh_context,
+            ownership_exact_ties,
+            ownership_closest,
+            ownership_facing,
+            ownership_global,
+            ownership_loops,
+            ownership_pipeline,
+            smoothing_diffusion,
+            smoothing_cutoff,
+            smoothing_constraints,
+            smoothing_options,
+            smoothing_validation,
+            smoothing_solver,
+            smoothed_automatic_bind,
+            automatic_surface_commands,
+            add_influence,
+            qt_helpers,
+            skin_weight_ramps,
+            smoothing_controls,
+            joint_list,
+            joint_drag_selection,
+            joint_search,
+            global_owner_tag,
+            skin_operations,
+            smoothing_bind_section,
+            component_section,
+            skin_weight_mode,
+            tool_window,
+        )
     )
 
 
@@ -144,12 +159,9 @@ def show(reload=False, auto_refresh=False):
         joint_search,
         skin_operations,
         skin_weight_mode,
-        skin_weight_ramps,
         smoothing_bind_section,
         tool_window,
     )
-
-    _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps)
 
     _install_ui(
         tool_window,
@@ -160,9 +172,10 @@ def show(reload=False, auto_refresh=False):
         component_section,
     )
     tool_window.show(auto_refresh=auto_refresh)
-    joint_search.install(tool_window)
-    joint_drag_selection.install(
-        tool_window.CTRL_JOINT_LIST,
-        selection_pruner=joint_search.prune_hidden_selection,
+    _install_post_show_ui(
+        tool_window,
+        joint_list,
+        joint_search,
+        joint_drag_selection,
+        skin_weight_mode,
     )
-    skin_weight_mode.install(tool_window, joint_list)
