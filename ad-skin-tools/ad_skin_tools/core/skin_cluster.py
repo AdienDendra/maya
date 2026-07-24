@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
 import maya.cmds as cmds
 
-from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core import mesh
+from ad_skin_tools.core.compat import ensure_numpy
 
 np = ensure_numpy()
 
@@ -25,54 +25,39 @@ class SkinData:
 
 
 class SkinClusterAdapter:
-    """
-    Small API wrapper around Maya skinCluster.
-
-    Responsibility:
-    - find skinCluster
-    - read influence list
-    - read weight matrix
-    - read one influence column for viewport preview
-    - query affected components per influence
-    - write weight matrix
-    """
+    """Focused API wrapper around one Maya ``skinCluster`` and output mesh."""
 
     def __init__(self, skin_cluster: str, mesh_shape: str):
-        self.skin_cluster = skin_cluster
-        self.mesh_shape = mesh_shape
-        self.mesh_dag_path = mesh.get_dag_path(mesh_shape)
-        self.skin_object = _get_depend_node(skin_cluster)
+        self.skin_cluster = str(skin_cluster)
+        self.mesh_shape = str(mesh_shape)
+        self.mesh_dag_path = mesh.get_dag_path(self.mesh_shape)
+        self.skin_object = _get_depend_node(self.skin_cluster)
         self.skin_fn = oma.MFnSkinCluster(self.skin_object)
 
     @classmethod
     def from_mesh(cls, mesh_shape: str) -> "SkinClusterAdapter":
-        skin_cluster = find_skin_cluster(mesh_shape, required=True)
-        return cls(skin_cluster=skin_cluster, mesh_shape=mesh_shape)
-
-    def influences(self) -> List[str]:
-        """
-        Return full DAG paths.
-
-        Full paths are required so duplicate joint names remain unambiguous.
-        The UI is responsible for displaying shorter readable labels.
-        """
-        paths = self.skin_fn.influenceObjects()
-        return [path.fullPathName() for path in paths]
-
-    def get_weights(self, vertex_ids: np.ndarray) -> SkinData:
-        vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
-        component = _make_vertex_component(vertex_ids)
-
-        flat_weights, influence_count = self.skin_fn.getWeights(
-            self.mesh_dag_path,
-            component,
+        return cls(
+            skin_cluster=find_skin_cluster(mesh_shape, required=True),
+            mesh_shape=mesh_shape,
         )
 
-        weights = np.array(flat_weights, dtype=np.float64).reshape(
+    def influences(self) -> List[str]:
+        """Return bound influences as unambiguous full DAG paths."""
+
+        return [path.fullPathName() for path in self._influence_objects()]
+
+    def get_weights(self, vertex_ids: np.ndarray) -> SkinData:
+        """Read the complete influence matrix for the requested vertices."""
+
+        vertex_ids = _as_vertex_ids(vertex_ids)
+        flat_weights, influence_count = self.skin_fn.getWeights(
+            self.mesh_dag_path,
+            _make_vertex_component(vertex_ids),
+        )
+        weights = np.asarray(flat_weights, dtype=np.float64).reshape(
             len(vertex_ids),
             int(influence_count),
         )
-
         return SkinData(
             skin_cluster=self.skin_cluster,
             mesh_shape=self.mesh_shape,
@@ -82,33 +67,14 @@ class SkinClusterAdapter:
         )
 
     def influence_weights(self, influence: str) -> np.ndarray:
-        """Return one full-mesh physical influence column.
+        """Read one full-mesh physical influence column without a full matrix."""
 
-        This avoids allocating the complete vertex-by-influence matrix for
-        visualization-only operations such as Skin Weight Mode.
-        """
-
-        influence_index = None
-        normalized_influence = str(influence)
-        for index, influence_path in enumerate(self.skin_fn.influenceObjects()):
-            if influence_path.fullPathName() == normalized_influence:
-                influence_index = index
-                break
-
-        if influence_index is None:
-            raise SkinClusterError(
-                "Influence is not bound to the loaded skinCluster: {}".format(
-                    influence
-                )
-            )
-
-        vertex_count = int(om.MFnMesh(self.mesh_dag_path).numVertices)
-        vertex_ids = np.arange(vertex_count, dtype=np.int32)
-        component = _make_vertex_component(vertex_ids)
+        influence_index = self._physical_influence_index(influence)
+        vertex_count = self.vertex_count()
         result = self.skin_fn.getWeights(
             self.mesh_dag_path,
-            component,
-            int(influence_index),
+            _make_vertex_component(range(vertex_count)),
+            influence_index,
         )
         if isinstance(result, tuple):
             result = result[0]
@@ -122,50 +88,25 @@ class SkinClusterAdapter:
         return weights
 
     def affected_vertex_ids(self, influences: Iterable[str]) -> np.ndarray:
-        """Return the union of non-zero loaded-mesh vertices for influences.
+        """Return the union of non-zero vertices for the requested influences."""
 
-        ``MFnSkinCluster.getPointsAffectedByInfluence`` queries only affected
-        components for each requested influence; it does not read the complete
-        vertex-by-influence weight matrix.
-        """
-
-        influence_paths = {
+        influence_objects = {
             path.fullPathName(): path
-            for path in self.skin_fn.influenceObjects()
+            for path in self._influence_objects()
         }
         mesh_path = self.mesh_dag_path.fullPathName()
         affected = set()
 
         for influence in influences:
-            influence_path = influence_paths.get(str(influence))
+            influence_path = influence_objects.get(str(influence))
             if influence_path is None:
                 continue
-
             selection, _weights = self.skin_fn.getPointsAffectedByInfluence(
                 influence_path
             )
-            for index in range(selection.length()):
-                try:
-                    dag_path, component = selection.getComponent(index)
-                except (RuntimeError, TypeError):
-                    continue
-
-                if component.isNull():
-                    continue
-
-                try:
-                    if dag_path.node().hasFn(om.MFn.kTransform):
-                        dag_path.extendToShape()
-                except RuntimeError:
-                    continue
-
-                if dag_path.fullPathName() != mesh_path:
-                    continue
-                if not component.hasFn(om.MFn.kMeshVertComponent):
-                    continue
-
-                component_fn = om.MFnSingleIndexedComponent(component)
-                affected.update(int(value) for value in component_fn.getElements())
+            affected.update(
+                _selection_vertex_ids(selection, expected_mesh_path=mesh_path)
+            )
 
         return np.asarray(sorted(affected), dtype=np.int32)
 
@@ -175,55 +116,57 @@ class SkinClusterAdapter:
         weights: np.ndarray,
         normalize: bool = True,
     ) -> None:
-        vertex_ids = np.asarray(vertex_ids, dtype=np.int32)
-        weights = np.asarray(weights, dtype=np.float64)
+        """Write one dense vertex-by-influence matrix."""
 
+        vertex_ids = _as_vertex_ids(vertex_ids)
+        weights = np.asarray(weights, dtype=np.float64)
         if weights.ndim != 2:
             raise SkinClusterError("Weights must be a 2D matrix.")
-
         if weights.shape[0] != len(vertex_ids):
             raise SkinClusterError(
-                f"Weight row count does not match vertex count: "
-                f"{weights.shape[0]} != {len(vertex_ids)}"
+                "Weight row count does not match vertex count: "
+                "{} != {}".format(weights.shape[0], len(vertex_ids))
             )
 
-        component = _make_vertex_component(vertex_ids)
-
-        influence_count = weights.shape[1]
-        influence_indices = om.MIntArray(list(range(influence_count)))
+        influence_indices = om.MIntArray(list(range(weights.shape[1])))
         flat_weights = om.MDoubleArray(weights.ravel().tolist())
-
         self.skin_fn.setWeights(
             self.mesh_dag_path,
-            component,
+            _make_vertex_component(vertex_ids),
             influence_indices,
             flat_weights,
-            normalize,
+            bool(normalize),
+        )
+
+    def vertex_count(self) -> int:
+        return int(om.MFnMesh(self.mesh_dag_path).numVertices)
+
+    def _influence_objects(self):
+        return self.skin_fn.influenceObjects()
+
+    def _physical_influence_index(self, influence: str) -> int:
+        target = str(influence)
+        for index, path in enumerate(self._influence_objects()):
+            if path.fullPathName() == target:
+                return int(index)
+        raise SkinClusterError(
+            "Influence is not bound to the loaded skinCluster: {}".format(
+                influence
+            )
         )
 
 
 def find_skin_cluster(mesh_shape: str, required: bool = True) -> Optional[str]:
-    """
-    Find skinCluster from mesh history.
+    """Return the first skinCluster in mesh history."""
 
-    required=True:
-        Raise SkinClusterError if not found.
-
-    required=False:
-        Return None if not found.
-    """
     history = cmds.listHistory(mesh_shape, pruneDagObjects=True) or []
-    skin_clusters = [
-        node for node in history
-        if cmds.nodeType(node) == "skinCluster"
-    ]
+    for node in history:
+        if cmds.nodeType(node) == "skinCluster":
+            return node
 
-    if not skin_clusters:
-        if required:
-            raise SkinClusterError(f"No skinCluster found on mesh: {mesh_shape}")
-        return None
-
-    return skin_clusters[0]
+    if required:
+        raise SkinClusterError("No skinCluster found on mesh: {}".format(mesh_shape))
+    return None
 
 
 def has_skin_cluster(mesh_shape: str) -> bool:
@@ -233,74 +176,34 @@ def has_skin_cluster(mesh_shape: str) -> bool:
 def create_closest_skin_cluster(
     mesh_shape: str,
     mesh_transform: str,
-    joints: List[str],
+    joints: Sequence[str],
     max_influences: int = 5,
 ) -> SkinClusterAdapter:
-    """
-    Create a skinCluster container for the custom segment solver.
+    """Create an empty-enough skinCluster container for the custom solver."""
 
-    Maya may generate temporary initial weights while creating the
-    skinCluster, but commands.bind_object_closest() will replace every
-    vertex row using weights calculated by segment_solver.
-    The solver itself enforces the maximum influence count. Maya's
-    automatic max-influence enforcement remains disabled so Maya does
-    not alter the custom weight matrix.
-    """
-    existing_skin = find_skin_cluster(
-        mesh_shape,
-        required=False,
-    )
-
-    if existing_skin:
+    if find_skin_cluster(mesh_shape, required=False):
         raise SkinClusterError(
             "The loaded object already has skin weights. "
             "Object-wide Closest binding is not allowed."
         )
-
     if not cmds.objExists(mesh_transform):
         raise SkinClusterError(
-            f"Loaded mesh no longer exists: {mesh_transform}"
+            "Loaded mesh no longer exists: {}".format(mesh_transform)
         )
 
     max_influences = int(max_influences)
-
     if max_influences < 1:
-        raise SkinClusterError(
-            "Maximum influences must be at least 1."
-        )
+        raise SkinClusterError("Maximum influences must be at least 1.")
 
-    normalized_joints = []
-    seen = set()
-
-    for joint in joints:
-        matches = cmds.ls(
-            joint,
-            long=True,
-            type="joint",
-        ) or []
-
-        if not matches:
-            raise SkinClusterError(
-                f"Joint no longer exists: {joint}"
-            )
-
-        joint_path = matches[0]
-
-        if joint_path in seen:
-            continue
-
-        seen.add(joint_path)
-        normalized_joints.append(joint_path)
-
+    normalized_joints = _normalize_joint_paths(joints)
     if len(normalized_joints) < 2:
         raise SkinClusterError(
             "Segment Weighted Bind requires at least two joints."
         )
 
-    skin_cluster_name = _next_available_skin_cluster_name(mesh_transform)
     created = cmds.skinCluster(
         *(normalized_joints + [mesh_transform]),
-        name=skin_cluster_name,
+        name=_next_available_skin_cluster_name(mesh_transform),
         toSelectedBones=True,
         bindMethod=0,
         skinMethod=0,
@@ -308,22 +211,56 @@ def create_closest_skin_cluster(
         obeyMaxInfluences=False,
         normalizeWeights=1,
     )
-
-    skin_cluster = (
-        created[0]
-        if isinstance(created, (list, tuple))
-        else created
-    )
-
+    skin_cluster = _first_result(created)
     if not skin_cluster or not cmds.objExists(skin_cluster):
-        raise SkinClusterError(
-            "Maya did not return a valid skinCluster."
-        )
+        raise SkinClusterError("Maya did not return a valid skinCluster.")
 
     return SkinClusterAdapter(
         skin_cluster=skin_cluster,
         mesh_shape=mesh_shape,
     )
+
+
+def _normalize_joint_paths(joints: Sequence[str]) -> List[str]:
+    normalized = []
+    seen = set()
+    for joint in joints:
+        matches = cmds.ls(joint, long=True, type="joint") or []
+        if not matches:
+            raise SkinClusterError("Joint no longer exists: {}".format(joint))
+        path = matches[0]
+        if path not in seen:
+            seen.add(path)
+            normalized.append(path)
+    return normalized
+
+
+def _selection_vertex_ids(selection, expected_mesh_path: str):
+    for index in range(selection.length()):
+        try:
+            dag_path, component = selection.getComponent(index)
+        except (RuntimeError, TypeError):
+            continue
+        if component.isNull():
+            continue
+        try:
+            if dag_path.node().hasFn(om.MFn.kTransform):
+                dag_path.extendToShape()
+        except RuntimeError:
+            continue
+        if dag_path.fullPathName() != expected_mesh_path:
+            continue
+        if not component.hasFn(om.MFn.kMeshVertComponent):
+            continue
+        component_fn = om.MFnSingleIndexedComponent(component)
+        for value in component_fn.getElements():
+            yield int(value)
+
+
+def _first_result(result):
+    if isinstance(result, (list, tuple)):
+        return result[0] if result else None
+    return result
 
 
 def _next_available_skin_cluster_name(mesh_transform: str) -> str:
@@ -344,8 +281,12 @@ def _get_depend_node(node_name: str) -> om.MObject:
     return selection.getDependNode(0)
 
 
-def _make_vertex_component(vertex_ids: np.ndarray) -> om.MObject:
+def _as_vertex_ids(vertex_ids) -> np.ndarray:
+    return np.asarray(vertex_ids, dtype=np.int32).reshape(-1)
+
+
+def _make_vertex_component(vertex_ids) -> om.MObject:
     component_fn = om.MFnSingleIndexedComponent()
     component = component_fn.create(om.MFn.kMeshVertComponent)
-    component_fn.addElements([int(v) for v in vertex_ids])
+    component_fn.addElements([int(vertex_id) for vertex_id in vertex_ids])
     return component
