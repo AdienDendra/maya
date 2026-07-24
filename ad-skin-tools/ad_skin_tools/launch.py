@@ -29,6 +29,8 @@ def _install_post_show_ui(
     joint_search,
     joint_drag_selection,
     skin_weight_mode,
+    skin_weight_mode_integration,
+    skin_operations,
 ):
     """Install Qt integrations that require built Maya controls."""
 
@@ -36,6 +38,10 @@ def _install_post_show_ui(
     joint_drag_selection.install(
         tool_window.CTRL_JOINT_LIST,
         selection_pruner=joint_search.prune_hidden_selection,
+    )
+    skin_weight_mode_integration.install(
+        skin_weight_mode,
+        skin_operations,
     )
     skin_weight_mode.install(tool_window, joint_list)
 
@@ -91,6 +97,7 @@ def reload_modules():
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
     import ad_skin_tools.ui.component_section as component_section
     import ad_skin_tools.ui.skin_weight_mode as skin_weight_mode
+    import ad_skin_tools.ui.skin_weight_mode_integration as skin_weight_mode_integration
     import ad_skin_tools.ui.tool_window as tool_window
 
     try:
@@ -142,6 +149,7 @@ def reload_modules():
             smoothing_bind_section,
             component_section,
             skin_weight_mode,
+            skin_weight_mode_integration,
             tool_window,
         )
     )
@@ -159,6 +167,7 @@ def show(reload=False, auto_refresh=False):
         joint_search,
         skin_operations,
         skin_weight_mode,
+        skin_weight_mode_integration,
         smoothing_bind_section,
         tool_window,
     )
@@ -178,4 +187,6 @@ def show(reload=False, auto_refresh=False):
         joint_search,
         joint_drag_selection,
         skin_weight_mode,
+        skin_weight_mode_integration,
+        skin_operations,
     )
