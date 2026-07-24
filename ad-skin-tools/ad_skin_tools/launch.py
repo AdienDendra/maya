@@ -10,10 +10,12 @@ def _install_ui(
     skin_operations,
     smoothing_bind_section,
     component_section,
+    mesh_context_display,
 ):
     """Install module overrides before Maya builds the window."""
 
     skin_operations.install(tool_window)
+    mesh_context_display.install(tool_window, skin_operations)
     global_owner_tag.install(tool_window, joint_list)
     smoothing_bind_section.install(tool_window, skin_operations)
     component_section.install(
@@ -31,6 +33,7 @@ def _install_post_show_ui(
     skin_weight_mode,
     skin_weight_mode_integration,
     skin_operations,
+    mesh_context_display,
 ):
     """Install Qt integrations that require built Maya controls."""
 
@@ -47,6 +50,10 @@ def _install_post_show_ui(
     skin_weight_mode_integration.install(
         tool_window,
         joint_list,
+    )
+    mesh_context_display.align_visual_controls(
+        skin_weight_mode,
+        skin_weight_mode_integration,
     )
 
 
@@ -98,6 +105,7 @@ def reload_modules():
     import ad_skin_tools.ui.joint_search as joint_search
     import ad_skin_tools.ui.global_owner_tag as global_owner_tag
     import ad_skin_tools.ui.skin_operations as skin_operations
+    import ad_skin_tools.ui.mesh_context_display as mesh_context_display
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
     import ad_skin_tools.ui.component_section as component_section
     import ad_skin_tools.ui.skin_weight_mode as skin_weight_mode
@@ -154,6 +162,7 @@ def reload_modules():
             joint_search,
             global_owner_tag,
             skin_operations,
+            mesh_context_display,
             smoothing_bind_section,
             component_section,
             skin_weight_mode,
@@ -173,6 +182,7 @@ def show(reload=False, auto_refresh=False):
         joint_drag_selection,
         joint_list,
         joint_search,
+        mesh_context_display,
         skin_operations,
         skin_weight_mode,
         skin_weight_mode_integration,
@@ -187,6 +197,7 @@ def show(reload=False, auto_refresh=False):
         skin_operations,
         smoothing_bind_section,
         component_section,
+        mesh_context_display,
     )
     tool_window.show(auto_refresh=auto_refresh)
     _install_post_show_ui(
@@ -197,4 +208,5 @@ def show(reload=False, auto_refresh=False):
         skin_weight_mode,
         skin_weight_mode_integration,
         skin_operations,
+        mesh_context_display,
     )
