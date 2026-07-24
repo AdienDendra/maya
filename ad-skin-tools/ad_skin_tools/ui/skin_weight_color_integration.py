@@ -1,4 +1,4 @@
-"""Install the v13.10 ephemeral color lifecycle into Skin Weight Visual."""
+"""Install the ephemeral color lifecycle into Skin Weight Visual."""
 
 import maya.cmds as cmds
 
@@ -44,7 +44,7 @@ def prepare(skin_weight_mode_module) -> None:
 
 
 def shutdown() -> None:
-    """Remove color data and restore the canonical v13.7 functions."""
+    """Remove color data and restore the canonical visual functions."""
 
     global _MODE, _REFRESH_QUEUED
 
