@@ -98,6 +98,7 @@ def install() -> None:
 
     from ad_skin_tools.ui import component_section, skin_operations
 
+    _wrap_before(_TOOL_WINDOW, "load_skin_weight", _deactivate_before_mesh_load)
     _wrap_operation(component_section, "apply_component_flood")
     _wrap_operation(component_section, "apply_component_smooth")
     _replace_operation_callback(
@@ -516,6 +517,32 @@ def _install_script_jobs():
     except Exception:
         pass
 
+
+def _deactivate_before_mesh_load():
+    if _MODE is None:
+        _cleanup_preview()
+        return
+    try:
+        _MODE._deactivate()
+    except Exception:
+        _cleanup_preview()
+
+
+def _wrap_before(module, function_name, before):
+    current = getattr(module, function_name)
+    key = (module.__name__, function_name)
+    if getattr(current, "_ad_skin_visual_proxy_before_wrapper", False):
+        return
+
+    _ORIGINAL_OPERATION_FUNCTIONS[key] = (module, current)
+
+    @wraps(current)
+    def wrapper(*args, **kwargs):
+        before()
+        return current(*args, **kwargs)
+
+    wrapper._ad_skin_visual_proxy_before_wrapper = True
+    setattr(module, function_name, wrapper)
 
 def _wrap_operation(module, function_name):
     current = getattr(module, function_name)
