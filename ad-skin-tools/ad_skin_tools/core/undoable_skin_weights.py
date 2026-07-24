@@ -151,6 +151,7 @@ class _SetWeightMatrixCommand(om.MPxCommand):
 
 
 def initializePlugin(plugin_object):
+    skin_weight_events.ensure_registered()
     plugin = om.MFnPlugin(
         plugin_object,
         "AD Skin Tool",
