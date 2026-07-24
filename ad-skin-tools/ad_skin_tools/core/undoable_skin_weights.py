@@ -8,6 +8,7 @@ import maya.cmds as cmds
 
 from ad_skin_tools.core.compat import ensure_numpy
 from ad_skin_tools.core.skin_cluster import SkinClusterAdapter
+from ad_skin_tools.core import skin_weight_events
 
 
 np = ensure_numpy()
@@ -144,6 +145,9 @@ class _SetWeightMatrixCommand(om.MPxCommand):
             weights,
             normalize=False,
         )
+        # The event callback only marks Viewport 2.0 draw data dirty. It does
+        # not query DG state, execute Maya commands, or alter the undo queue.
+        skin_weight_events.post(self._mesh_shape)
 
 
 def initializePlugin(plugin_object):
