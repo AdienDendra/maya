@@ -39,11 +39,15 @@ def _install_post_show_ui(
         tool_window.CTRL_JOINT_LIST,
         selection_pruner=joint_search.prune_hidden_selection,
     )
-    skin_weight_mode_integration.install(
+    skin_weight_mode_integration.prepare(
         skin_weight_mode,
         skin_operations,
     )
     skin_weight_mode.install(tool_window, joint_list)
+    skin_weight_mode_integration.install(
+        tool_window,
+        joint_list,
+    )
 
 
 def _reload_modules(modules):
@@ -100,6 +104,10 @@ def reload_modules():
     import ad_skin_tools.ui.skin_weight_mode_integration as skin_weight_mode_integration
     import ad_skin_tools.ui.tool_window as tool_window
 
+    try:
+        skin_weight_mode_integration.shutdown()
+    except Exception:
+        pass
     try:
         skin_weight_mode.shutdown()
     except Exception:
