@@ -32,6 +32,7 @@ class SkinClusterAdapter:
     - find skinCluster
     - read influence list
     - read weight matrix
+    - read one influence column for viewport preview
     - query affected components per influence
     - write weight matrix
     """
@@ -79,6 +80,46 @@ class SkinClusterAdapter:
             influences=self.influences(),
             weights=weights,
         )
+
+    def influence_weights(self, influence: str) -> np.ndarray:
+        """Return one full-mesh physical influence column.
+
+        This avoids allocating the complete vertex-by-influence matrix for
+        visualization-only operations such as Skin Weight Mode.
+        """
+
+        influence_index = None
+        normalized_influence = str(influence)
+        for index, influence_path in enumerate(self.skin_fn.influenceObjects()):
+            if influence_path.fullPathName() == normalized_influence:
+                influence_index = index
+                break
+
+        if influence_index is None:
+            raise SkinClusterError(
+                "Influence is not bound to the loaded skinCluster: {}".format(
+                    influence
+                )
+            )
+
+        vertex_count = int(om.MFnMesh(self.mesh_dag_path).numVertices)
+        vertex_ids = np.arange(vertex_count, dtype=np.int32)
+        component = _make_vertex_component(vertex_ids)
+        result = self.skin_fn.getWeights(
+            self.mesh_dag_path,
+            component,
+            int(influence_index),
+        )
+        if isinstance(result, tuple):
+            result = result[0]
+
+        weights = np.asarray(result, dtype=np.float64).reshape(-1)
+        if len(weights) != vertex_count:
+            raise SkinClusterError(
+                "Influence weight count does not match the loaded mesh: "
+                "{} != {}".format(len(weights), vertex_count)
+            )
+        return weights
 
     def affected_vertex_ids(self, influences: Iterable[str]) -> np.ndarray:
         """Return the union of non-zero loaded-mesh vertices for influences.
