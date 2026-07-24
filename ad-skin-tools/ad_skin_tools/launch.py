@@ -21,6 +21,12 @@ def _install_ui(
     )
 
 
+def _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps):
+    """Keep icon and viewport interpolation on the same exact ramp data."""
+
+    skin_weight_mode._RAMPS = skin_weight_ramps.RAMPS
+
+
 def reload_modules():
     import ad_skin_tools.core.compat as compat
     import ad_skin_tools.core.undo as undo
@@ -63,6 +69,7 @@ def reload_modules():
     import ad_skin_tools.ui.smoothing_bind_section as smoothing_bind_section
     import ad_skin_tools.ui.component_section as component_section
     import ad_skin_tools.ui.skin_weight_mode as skin_weight_mode
+    import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
     import ad_skin_tools.ui.tool_window as tool_window
 
     try:
@@ -109,8 +116,11 @@ def reload_modules():
     importlib.reload(skin_operations)
     importlib.reload(smoothing_bind_section)
     importlib.reload(component_section)
+    importlib.reload(skin_weight_ramps)
     importlib.reload(skin_weight_mode)
     importlib.reload(tool_window)
+
+    _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps)
 
     _install_ui(
         tool_window,
@@ -134,9 +144,12 @@ def show(reload=False, auto_refresh=False):
         joint_search,
         skin_operations,
         skin_weight_mode,
+        skin_weight_ramps,
         smoothing_bind_section,
         tool_window,
     )
+
+    _apply_skin_weight_ramps(skin_weight_mode, skin_weight_ramps)
 
     _install_ui(
         tool_window,
