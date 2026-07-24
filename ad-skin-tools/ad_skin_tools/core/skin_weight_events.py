@@ -21,8 +21,9 @@ def add_callback(callback):
 
 
 def post(mesh_shape=None) -> None:
-    """Post a lightweight invalidation event after a skin-weight write."""
+    """Post an already-registered invalidation event after a weight write."""
 
-    ensure_registered()
+    if not om.MUserEventMessage.isUserEvent(EVENT_NAME):
+        return
     client_data = str(mesh_shape) if mesh_shape else None
     om.MUserEventMessage.postUserEvent(EVENT_NAME, client_data)
