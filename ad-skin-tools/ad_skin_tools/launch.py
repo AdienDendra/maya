@@ -32,6 +32,7 @@ def _install_post_show_ui(
     joint_drag_selection,
     skin_weight_mode,
     skin_weight_mode_integration,
+    skin_weight_visual_proxy,
     skin_operations,
     mesh_context_display,
 ):
@@ -42,6 +43,10 @@ def _install_post_show_ui(
         tool_window.CTRL_JOINT_LIST,
         selection_pruner=joint_search.prune_hidden_selection,
     )
+    skin_weight_visual_proxy.prepare(
+        skin_weight_mode,
+        tool_window,
+    )
     skin_weight_mode_integration.prepare(
         skin_weight_mode,
         skin_operations,
@@ -51,6 +56,7 @@ def _install_post_show_ui(
         tool_window,
         joint_list,
     )
+    skin_weight_visual_proxy.install()
     mesh_context_display.align_visual_controls(
         skin_weight_mode,
         skin_weight_mode_integration,
@@ -99,6 +105,7 @@ def reload_modules():
 
     import ad_skin_tools.ui.qt_helpers as qt_helpers
     import ad_skin_tools.ui.skin_weight_ramps as skin_weight_ramps
+    import ad_skin_tools.ui.skin_weight_visual_proxy as skin_weight_visual_proxy
     import ad_skin_tools.ui.smoothing_controls as smoothing_controls
     import ad_skin_tools.ui.joint_list as joint_list
     import ad_skin_tools.ui.joint_drag_selection as joint_drag_selection
@@ -112,6 +119,10 @@ def reload_modules():
     import ad_skin_tools.ui.skin_weight_mode_integration as skin_weight_mode_integration
     import ad_skin_tools.ui.tool_window as tool_window
 
+    try:
+        skin_weight_visual_proxy.shutdown()
+    except Exception:
+        pass
     try:
         skin_weight_mode_integration.shutdown()
     except Exception:
@@ -156,6 +167,7 @@ def reload_modules():
             add_influence,
             qt_helpers,
             skin_weight_ramps,
+            skin_weight_visual_proxy,
             smoothing_controls,
             joint_list,
             joint_drag_selection,
@@ -186,6 +198,7 @@ def show(reload=False, auto_refresh=False):
         skin_operations,
         skin_weight_mode,
         skin_weight_mode_integration,
+        skin_weight_visual_proxy,
         smoothing_bind_section,
         tool_window,
     )
@@ -207,6 +220,7 @@ def show(reload=False, auto_refresh=False):
         joint_drag_selection,
         skin_weight_mode,
         skin_weight_mode_integration,
+        skin_weight_visual_proxy,
         skin_operations,
         mesh_context_display,
     )
